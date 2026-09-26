@@ -1,4 +1,10 @@
-use std::{collections::HashMap, env, fs::read_to_string, path::Path};
+use std::{
+    collections::{BTreeMap, HashMap},
+    env,
+    fs::{File, read_to_string},
+    io::Write,
+    path::Path,
+};
 
 use clap::{Parser, Subcommand};
 
@@ -39,6 +45,31 @@ struct NpmDependency {
     peer_dependencies: Vec<String>,
 }
 
+#[derive(serde::Serialize)]
+struct DependabotConfig {
+    version: u8,
+    updates: Vec<DependabotUpdate>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct DependabotUpdate {
+    package_ecosystem: String,
+    directory: String,
+    schedule: DependabotSchedule,
+    groups: BTreeMap<String, DependabotGroup>,
+}
+
+#[derive(serde::Serialize)]
+struct DependabotSchedule {
+    interval: String,
+}
+
+#[derive(serde::Serialize)]
+struct DependabotGroup {
+    patterns: Vec<String>,
+}
+
 fn main() -> () {
     let _ = Cli::parse();
 
@@ -47,13 +78,19 @@ fn main() -> () {
 
     let ecosystem = detect_ecosystem(current_path);
 
-    match ecosystem {
+    let groups: Option<HashMap<String, Vec<String>>> = match ecosystem {
         Some(Ecosystem::Npm) => {
             let dependencies = read_npm_dependency_metadata(current_path).unwrap();
-            group_npm_dependencies(&dependencies);
+            Some(group_npm_dependencies(&dependencies))
         }
-        None => {}
+        None => None,
     };
+
+    if groups.is_none() {
+        return;
+    }
+
+    write_dependabot_config_file(Path::new(".github/dependabot.yml"), &groups.unwrap()).unwrap();
 }
 
 fn detect_ecosystem(root: &Path) -> Option<Ecosystem> {
@@ -107,7 +144,7 @@ fn read_npm_dependency_metadata(
 }
 
 fn group_npm_dependencies(dependencies: &[NpmDependency]) -> HashMap<String, Vec<String>> {
-    let mut groups = group_npm_dependencies_by_peer(dependencies);
+    let mut groups = merge_overlapping_peer_groups(group_npm_dependencies_by_peer(dependencies));
     let peer_members: std::collections::HashSet<_> = groups.values().flatten().cloned().collect();
 
     for (scope, mut members) in group_npm_dependencies_by_scope(dependencies) {
@@ -123,6 +160,143 @@ fn group_npm_dependencies(dependencies: &[NpmDependency]) -> HashMap<String, Vec
     }
 
     groups
+}
+
+fn merge_overlapping_peer_groups(
+    groups: HashMap<String, Vec<String>>,
+) -> HashMap<String, Vec<String>> {
+    let mut groups: Vec<_> = groups
+        .into_iter()
+        .map(|(peer, members)| {
+            (
+                peer,
+                members
+                    .into_iter()
+                    .collect::<std::collections::HashSet<_>>(),
+            )
+        })
+        .collect();
+    groups.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut index = 0;
+    while index < groups.len() {
+        let mut other_index = index + 1;
+        while other_index < groups.len() {
+            if groups[index].1.is_disjoint(&groups[other_index].1) {
+                other_index += 1;
+                continue;
+            }
+
+            let (other_peer, other_members) = groups.remove(other_index);
+            groups[index].0.push('+');
+            groups[index].0.push_str(&other_peer);
+            groups[index].1.extend(other_members);
+        }
+        index += 1;
+    }
+
+    groups
+        .into_iter()
+        .map(|(peer, members)| (peer, members.into_iter().collect()))
+        .collect()
+}
+
+fn dependabot_group_identifier(group: &str) -> String {
+    let is_scope = group.starts_with('@') && !group.contains('/');
+    let name = if is_scope {
+        group.trim_start_matches('@').to_string()
+    } else {
+        common_peer_root(group)
+    };
+    let slug: String = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    slug.trim_matches('-').to_string()
+}
+
+fn common_peer_root(group: &str) -> String {
+    let mut peers = group.split('+');
+    let first_peer = peers
+        .next()
+        .expect("peer groups must contain at least one peer");
+    let common_prefix = peers.fold(first_peer.to_string(), |prefix, peer| {
+        prefix
+            .chars()
+            .zip(peer.chars())
+            .take_while(|(left, right)| left == right)
+            .map(|(character, _)| character)
+            .collect()
+    });
+    let root = common_prefix.trim_end_matches(|character: char| !character.is_ascii_alphanumeric());
+
+    assert!(
+        !root.is_empty(),
+        "peer groups must share a common name root"
+    );
+    root.to_string()
+}
+
+fn write_dependabot_config<W: Write>(
+    writer: W,
+    groups: &HashMap<String, Vec<String>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut dependabot_groups = BTreeMap::new();
+    for (group, patterns) in groups {
+        let identifier = dependabot_group_identifier(group);
+        if dependabot_groups
+            .insert(
+                identifier,
+                DependabotGroup {
+                    patterns: patterns.clone(),
+                },
+            )
+            .is_some()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "multiple dependency groups produced the same Dependabot identifier",
+            )
+            .into());
+        }
+    }
+
+    let config = DependabotConfig {
+        version: 2,
+        updates: vec![DependabotUpdate {
+            package_ecosystem: "npm".to_string(),
+            directory: "/".to_string(),
+            schedule: DependabotSchedule {
+                interval: "weekly".to_string(),
+            },
+            groups: dependabot_groups,
+        }],
+    };
+    serde_yaml_ng::to_writer(writer, &config)?;
+
+    Ok(())
+}
+
+fn write_dependabot_config_file(
+    path: &Path,
+    groups: &HashMap<String, Vec<String>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    write_dependabot_config(File::create(path)?, groups)?;
+
+    Ok(())
 }
 
 fn group_npm_dependencies_by_scope(dependencies: &[NpmDependency]) -> HashMap<String, Vec<String>> {
