@@ -1,0 +1,8 @@
+{
+  "name": "npm-fixture",
+  "dependencies": {
+    "@acme/core": "^1.0.0",
+    "@acme/ui": "^1.0.0",
+    "lodash": "^4.17.21"
+  }
+}
