@@ -50,8 +50,7 @@ fn main() -> () {
     match ecosystem {
         Some(Ecosystem::Npm) => {
             let dependencies = read_npm_dependency_metadata(current_path).unwrap();
-            group_npm_dependencies_by_scope(&dependencies);
-            group_npm_dependencies_by_peer(&dependencies);
+            group_npm_dependencies(&dependencies);
         }
         None => {}
     };
@@ -105,6 +104,25 @@ fn read_npm_dependency_metadata(
             })
         })
         .collect()
+}
+
+fn group_npm_dependencies(dependencies: &[NpmDependency]) -> HashMap<String, Vec<String>> {
+    let mut groups = group_npm_dependencies_by_peer(dependencies);
+    let peer_members: std::collections::HashSet<_> = groups.values().flatten().cloned().collect();
+
+    for (scope, mut members) in group_npm_dependencies_by_scope(dependencies) {
+        members.retain(|member| !peer_members.contains(member));
+        if !members.is_empty() {
+            groups.entry(scope).or_insert_with(Vec::new).extend(members);
+        }
+    }
+
+    for members in groups.values_mut() {
+        members.sort();
+        members.dedup();
+    }
+
+    groups
 }
 
 fn group_npm_dependencies_by_scope(dependencies: &[NpmDependency]) -> HashMap<String, Vec<String>> {
@@ -231,5 +249,31 @@ mod tests {
             Some(&vec!["@npm/tea".to_string(), "@npm/tea-latte".to_string()])
         );
         assert!(!groups.contains_key("@other/unrelated"));
+    }
+
+    #[test]
+    fn peer_group_takes_precedence_over_scope_group() {
+        let dependencies = vec![
+            NpmDependency {
+                name: "@acme/core".to_string(),
+                peer_dependencies: vec![],
+            },
+            NpmDependency {
+                name: "@acme/plugin".to_string(),
+                peer_dependencies: vec!["@acme/core".to_string()],
+            },
+            NpmDependency {
+                name: "@acme/other".to_string(),
+                peer_dependencies: vec![],
+            },
+        ];
+
+        let groups = group_npm_dependencies(&dependencies);
+
+        assert_eq!(
+            groups.get("@acme/core"),
+            Some(&vec!["@acme/core".to_string(), "@acme/plugin".to_string()])
+        );
+        assert_eq!(groups.get("@acme"), Some(&vec!["@acme/other".to_string()]));
     }
 }
