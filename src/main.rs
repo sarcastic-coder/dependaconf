@@ -341,113 +341,221 @@ fn group_npm_dependencies_by_peer(dependencies: &[NpmDependency]) -> HashMap<Str
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    mod npm {
+        use super::super::*;
 
-    #[test]
-    fn can_detect_npm_ecosystem() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm");
-        assert_eq!(detect_ecosystem(&root), Some(Ecosystem::Npm));
+        #[test]
+        fn can_detect_npm_ecosystem() {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm");
+            assert_eq!(detect_ecosystem(&root), Some(Ecosystem::Npm));
+        }
+
+        #[test]
+        fn does_not_detect_npm_without_package_json() {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empty");
+            assert_eq!(detect_ecosystem(&root), None);
+        }
+
+        #[test]
+        fn reads_peer_dependencies_from_npm_lockfile() {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm-peer");
+
+            let dependencies = read_npm_dependency_metadata(&root).unwrap();
+            let plugin = dependencies
+                .iter()
+                .find(|dependency| dependency.name == "react-dom")
+                .unwrap();
+
+            assert_eq!(plugin.peer_dependencies, vec!["react".to_string()]);
+        }
+
+        #[test]
+        fn groups_npm_packages_by_scope() {
+            let dependencies = vec![
+                NpmDependency {
+                    name: "@acme/core".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@acme/ui".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@other/plugin".to_string(),
+                    peer_dependencies: vec![],
+                },
+            ];
+
+            let groups = group_npm_dependencies_by_scope(&dependencies);
+
+            assert_eq!(
+                groups,
+                HashMap::from([
+                    (
+                        "@acme".to_string(),
+                        vec!["@acme/core".to_string(), "@acme/ui".to_string()],
+                    ),
+                    ("@other".to_string(), vec!["@other/plugin".to_string()],),
+                ])
+            );
+        }
+
+        #[test]
+        fn groups_npm_dependency_with_its_installed_peer() {
+            let dependencies = vec![
+                NpmDependency {
+                    name: "@npm/tea-latte".to_string(),
+                    peer_dependencies: vec!["@npm/tea".to_string()],
+                },
+                NpmDependency {
+                    name: "@npm/tea".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@other/unrelated".to_string(),
+                    peer_dependencies: vec![],
+                },
+            ];
+
+            let groups = group_npm_dependencies_by_peer(&dependencies);
+
+            assert_eq!(
+                groups.get("@npm/tea"),
+                Some(&vec!["@npm/tea".to_string(), "@npm/tea-latte".to_string()])
+            );
+            assert!(!groups.contains_key("@other/unrelated"));
+        }
+
+        #[test]
+        fn peer_group_takes_precedence_over_scope_group() {
+            let dependencies = vec![
+                NpmDependency {
+                    name: "@acme/core".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@acme/plugin".to_string(),
+                    peer_dependencies: vec!["@acme/core".to_string()],
+                },
+                NpmDependency {
+                    name: "@acme/other".to_string(),
+                    peer_dependencies: vec![],
+                },
+            ];
+
+            let groups = group_npm_dependencies(&dependencies);
+
+            assert_eq!(
+                groups.get("@acme/core"),
+                Some(&vec!["@acme/core".to_string(), "@acme/plugin".to_string()])
+            );
+            assert_eq!(groups.get("@acme"), Some(&vec!["@acme/other".to_string()]));
+        }
+
+        #[test]
+        fn merges_overlapping_peer_groups_without_repeating_dependencies() {
+            let dependencies = vec![
+                NpmDependency {
+                    name: "react".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "react-dom".to_string(),
+                    peer_dependencies: vec!["react".to_string()],
+                },
+                NpmDependency {
+                    name: "@testing-library/react".to_string(),
+                    peer_dependencies: vec!["react".to_string(), "react-dom".to_string()],
+                },
+                NpmDependency {
+                    name: "react-scripts".to_string(),
+                    peer_dependencies: vec!["react".to_string(), "react-dom".to_string()],
+                },
+                NpmDependency {
+                    name: "styled-components".to_string(),
+                    peer_dependencies: vec!["react".to_string(), "react-dom".to_string()],
+                },
+            ];
+
+            let groups = group_npm_dependencies(&dependencies);
+
+            assert_eq!(groups.len(), 1);
+            assert_eq!(
+                groups.values().next().unwrap(),
+                &vec![
+                    "@testing-library/react".to_string(),
+                    "react".to_string(),
+                    "react-dom".to_string(),
+                    "react-scripts".to_string(),
+                    "styled-components".to_string(),
+                ]
+            );
+        }
     }
 
-    #[test]
-    fn does_not_detect_npm_without_package_json() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empty");
-        assert_eq!(detect_ecosystem(&root), None);
-    }
+    mod dependabot_config {
+        use super::super::*;
 
-    #[test]
-    fn reads_peer_dependencies_from_npm_lockfile() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm-peer");
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        struct ExpectedGroups {
+            acme: ExpectedGroup,
+            react: ExpectedGroup,
+        }
 
-        let dependencies = read_npm_dependency_metadata(&root).unwrap();
-        let plugin = dependencies
-            .iter()
-            .find(|dependency| dependency.name == "react-dom")
-            .unwrap();
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        struct ExpectedGroup {
+            patterns: Vec<String>,
+        }
 
-        assert_eq!(plugin.peer_dependencies, vec!["react".to_string()]);
-    }
-
-    #[test]
-    fn groups_npm_packages_by_scope() {
-        let dependencies = vec![
-            NpmDependency {
-                name: "@acme/core".to_string(),
-                peer_dependencies: vec![],
-            },
-            NpmDependency {
-                name: "@acme/ui".to_string(),
-                peer_dependencies: vec![],
-            },
-            NpmDependency {
-                name: "@other/plugin".to_string(),
-                peer_dependencies: vec![],
-            },
-        ];
-
-        let groups = group_npm_dependencies_by_scope(&dependencies);
-
-        assert_eq!(
-            groups,
+        fn sample_groups() -> HashMap<String, Vec<String>> {
             HashMap::from([
                 (
                     "@acme".to_string(),
                     vec!["@acme/core".to_string(), "@acme/ui".to_string()],
                 ),
-                ("@other".to_string(), vec!["@other/plugin".to_string()],),
+                (
+                    "react+react-dom".to_string(),
+                    vec!["react".to_string(), "react-dom".to_string()],
+                ),
             ])
-        );
-    }
+        }
 
-    #[test]
-    fn groups_npm_dependency_with_its_installed_peer() {
-        let dependencies = vec![
-            NpmDependency {
-                name: "@npm/tea-latte".to_string(),
-                peer_dependencies: vec!["@npm/tea".to_string()],
-            },
-            NpmDependency {
-                name: "@npm/tea".to_string(),
-                peer_dependencies: vec![],
-            },
-            NpmDependency {
-                name: "@other/unrelated".to_string(),
-                peer_dependencies: vec![],
-            },
-        ];
+        #[test]
+        fn uses_common_peer_name_root_for_group_identifier() {
+            assert_eq!(dependabot_group_identifier("react+react-dom"), "react");
+            assert_eq!(dependabot_group_identifier("@acme"), "acme");
+        }
 
-        let groups = group_npm_dependencies_by_peer(&dependencies);
+        #[test]
+        fn serializes_dependency_groups_to_dependabot_yaml() {
+            let mut output = Vec::new();
 
-        assert_eq!(
-            groups.get("@npm/tea"),
-            Some(&vec!["@npm/tea".to_string(), "@npm/tea-latte".to_string()])
-        );
-        assert!(!groups.contains_key("@other/unrelated"));
-    }
+            write_dependabot_config(&mut output, &sample_groups()).unwrap();
 
-    #[test]
-    fn peer_group_takes_precedence_over_scope_group() {
-        let dependencies = vec![
-            NpmDependency {
-                name: "@acme/core".to_string(),
-                peer_dependencies: vec![],
-            },
-            NpmDependency {
-                name: "@acme/plugin".to_string(),
-                peer_dependencies: vec!["@acme/core".to_string()],
-            },
-            NpmDependency {
-                name: "@acme/other".to_string(),
-                peer_dependencies: vec![],
-            },
-        ];
+            let contents = String::from_utf8(output).unwrap();
+            let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+            let actual_groups: ExpectedGroups =
+                serde_yaml_ng::from_value(config["updates"][0]["groups"].clone()).unwrap();
+            let expected_groups = ExpectedGroups {
+                acme: ExpectedGroup {
+                    patterns: vec!["@acme/core".to_string(), "@acme/ui".to_string()],
+                },
+                react: ExpectedGroup {
+                    patterns: vec!["react".to_string(), "react-dom".to_string()],
+                },
+            };
 
-        let groups = group_npm_dependencies(&dependencies);
+            assert_eq!(actual_groups, expected_groups);
+        }
 
-        assert_eq!(
-            groups.get("@acme/core"),
-            Some(&vec!["@acme/core".to_string(), "@acme/plugin".to_string()])
-        );
-        assert_eq!(groups.get("@acme"), Some(&vec!["@acme/other".to_string()]));
+        #[test]
+        fn writes_dependabot_config_file_and_creates_parent_directory() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let config_path = temp_dir.path().join(".github/dependabot.yml");
+
+            write_dependabot_config_file(&config_path, &sample_groups()).unwrap();
+
+            assert!(config_path.is_file());
+        }
     }
 }
