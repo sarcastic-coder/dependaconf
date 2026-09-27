@@ -1,0 +1,74 @@
+name: Build osxcross toolchain
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-osxcross:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: eu-west-1
+      OSXCROSS_COMMIT: 27d21e4977c9751d01199c7a226a6faf494c3dd9
+      OSXCROSS_PREFIX: /opt/dependaconf-osxcross
+    steps:
+      - name: Install osxcross build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            bash bzip2 clang cmake cpio curl git gzip libbz2-dev \
+            liblzma-dev libssl-dev libxml2-dev lld llvm make patch \
+            python3 sed tar xz-utils zlib1g-dev zstd
+
+      - name: Download osxcross source
+        run: |
+          mkdir -p osxcross
+          curl --fail --show-error --location --retry 3 \
+            "https://api.github.com/repos/tpoechtrager/osxcross/tarball/$OSXCROSS_COMMIT" \
+            --output "$RUNNER_TEMP/osxcross.tar.gz"
+          tar -xzf "$RUNNER_TEMP/osxcross.tar.gz" \
+            --strip-components=1 \
+            --directory osxcross
+          mkdir -p osxcross/tarballs
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::707241054938:role/dependaconf-build
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: osxcross-${{ github.run_id }}
+
+      - name: Download macOS SDK
+        run: |
+          aws s3 cp \
+            s3://dependaconf-public/macos-sdk/MacOSX26.sdk.tar.xz \
+            osxcross/tarballs/MacOSX26.sdk.tar.xz \
+            --only-show-errors
+
+      - name: Build osxcross
+        run: |
+          TARGET_DIR="$OSXCROSS_PREFIX" \
+            UNATTENDED=1 \
+            BUILD_FLAVOR=llvm \
+            ENABLE_ARCHS=arm64 \
+            osxcross/build.sh
+
+      - name: Package and upload toolchain
+        run: |
+          archive="osxcross-${OSXCROSS_COMMIT}-MacOSX26-arm64-llvm.tar.zst"
+          sudo tar --zstd -cf "$RUNNER_TEMP/$archive" \
+            -C /opt dependaconf-osxcross
+          sha256sum "$RUNNER_TEMP/$archive" \
+            > "$RUNNER_TEMP/$archive.sha256"
+
+          aws s3 cp "$RUNNER_TEMP/$archive" \
+            "s3://dependaconf-public/osxcross/toolchains/$archive" \
+            --only-show-errors
+          aws s3 cp "$RUNNER_TEMP/$archive.sha256" \
+            "s3://dependaconf-public/osxcross/toolchains/$archive.sha256" \
+            --only-show-errors
