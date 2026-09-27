@@ -52,13 +52,13 @@ jobs:
         run: |
           TARGET_DIR="$OSXCROSS_PREFIX" \
             UNATTENDED=1 \
-            BUILD_FLAVOR=llvm \
+            BUILD_FLAVOR=stable \
             ENABLE_ARCHS=arm64 \
             osxcross/build.sh
 
       - name: Package and upload toolchain
         run: |
-          archive="osxcross-${OSXCROSS_COMMIT}-MacOSX26-arm64-llvm.tar.zst"
+          archive="osxcross-${OSXCROSS_COMMIT}-MacOSX26-arm64-stable.tar.zst"
           sudo tar --zstd -cf "$RUNNER_TEMP/$archive" \
             -C /opt dependaconf-osxcross
           sha256sum "$RUNNER_TEMP/$archive" \
