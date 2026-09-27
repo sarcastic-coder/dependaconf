@@ -15,6 +15,13 @@ jobs:
       OSXCROSS_COMMIT: 27d21e4977c9751d01199c7a226a6faf494c3dd9
       OSXCROSS_PREFIX: /opt/dependaconf-osxcross
     steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::707241054938:role/dependaconf-build
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: osxcross-${{ github.run_id }}
+
       - name: Install osxcross build dependencies
         run: |
           sudo apt-get update
@@ -33,13 +40,6 @@ jobs:
             --strip-components=1 \
             --directory osxcross
           mkdir -p osxcross/tarballs
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: arn:aws:iam::707241054938:role/dependaconf-build
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: osxcross-${{ github.run_id }}
 
       - name: Download macOS SDK
         run: |
