@@ -41,14 +41,6 @@ jobs:
             x86_64-pc-windows-msvc
           rustup component add llvm-tools
 
-      - name: Build x86_64 Linux
-        run: cargo build --release --target x86_64-unknown-linux-gnu
-
-      - name: Build AArch64 Linux
-        run: cargo build --release --target aarch64-unknown-linux-gnu
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-
       - name: Checkout osxcross
         uses: actions/checkout@v7
         with:
@@ -87,14 +79,46 @@ jobs:
           fi
           echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=$linker" >> "$GITHUB_ENV"
 
-      - name: Build AArch64 macOS
-        run: cargo build --release --target aarch64-apple-darwin
-
       - name: Install cargo-xwin
         run: cargo install --locked --version 0.23.1 cargo-xwin
 
-      - name: Build Windows MSVC
-        run: cargo xwin build --release --target x86_64-pc-windows-msvc
+      - name: Build all targets
+        shell: bash
+        run: |
+          set +e
+
+          CARGO_BUILD_JOBS=1 cargo build --release --target x86_64-unknown-linux-gnu \
+            > "$RUNNER_TEMP/build-x86_64-linux.log" 2>&1 &
+          x86_linux_pid=$!
+
+          CARGO_BUILD_JOBS=1 \
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+            cargo build --release --target aarch64-unknown-linux-gnu \
+            > "$RUNNER_TEMP/build-aarch64-linux.log" 2>&1 &
+          aarch64_linux_pid=$!
+
+          CARGO_BUILD_JOBS=1 cargo build --release --target aarch64-apple-darwin \
+            > "$RUNNER_TEMP/build-aarch64-macos.log" 2>&1 &
+          aarch64_macos_pid=$!
+
+          CARGO_BUILD_JOBS=1 cargo xwin build --release --target x86_64-pc-windows-msvc \
+            > "$RUNNER_TEMP/build-x86_64-windows.log" 2>&1 &
+          windows_pid=$!
+
+          wait "$x86_linux_pid"; x86_linux_status=$?
+          wait "$aarch64_linux_pid"; aarch64_linux_status=$?
+          wait "$aarch64_macos_pid"; aarch64_macos_status=$?
+          wait "$windows_pid"; windows_status=$?
+
+          cat "$RUNNER_TEMP/build-x86_64-linux.log"
+          cat "$RUNNER_TEMP/build-aarch64-linux.log"
+          cat "$RUNNER_TEMP/build-aarch64-macos.log"
+          cat "$RUNNER_TEMP/build-x86_64-windows.log"
+
+          if (( x86_linux_status || aarch64_linux_status || aarch64_macos_status || windows_status )); then
+            echo "One or more target builds failed (x86_64 Linux=$x86_linux_status, AArch64 Linux=$aarch64_linux_status, AArch64 macOS=$aarch64_macos_status, Windows MSVC=$windows_status)."
+            exit 1
+          fi
 
       - name: Stage release binaries
         run: |
