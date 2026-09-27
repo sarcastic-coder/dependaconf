@@ -5,13 +5,11 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   build-osxcross:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     env:
       AWS_REGION: eu-west-1
       OSXCROSS_COMMIT: 27d21e4977c9751d01199c7a226a6faf494c3dd9
