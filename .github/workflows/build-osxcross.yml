@@ -26,8 +26,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            bash bzip2 clang cmake cpio curl git gzip libbz2-dev \
-            liblzma-dev libssl-dev libxml2-dev lld llvm make patch \
+            bash bzip2 clang-20 cmake cpio curl git gzip libbz2-dev \
+            liblzma-dev libssl-dev libxml2-dev lld-20 llvm-20 make patch \
             python3 sed tar xz-utils zlib1g-dev zstd
 
       - name: Download osxcross source
