@@ -61,7 +61,7 @@ jobs:
 
       - name: Get MacOS Linker
         run: |
-          cd dependabot-osxcross
+          cd dependaconf-osxcross
 
           linker="$(find "$PWD/target/bin" -maxdepth 1 \
             -name 'arm64-apple-darwin*-clang' -print -quit)"
