@@ -29,28 +29,20 @@ jobs:
             bash build-essential bzip2 clang-20 cmake cpio curl git gzip \
             libbz2-dev liblzma-dev libssl-dev libxml2-dev lld-20 llvm-20 \
             make patch python3 sed tar xz-utils zlib1g-dev zstd
-
           which clang
           clang --version
-
           which clang++
           clang++ --version
-
           which clang-20
           clang-20 --version
-
           ls -l "$(which clang)"
           ls -l "$(which clang++)"
-
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-20 100
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-20 100
-
           which clang
           clang --version
-
           which clang++
           clang++ --version
-
           ls -l "$(which clang)"
           ls -l "$(which clang++)"
 
