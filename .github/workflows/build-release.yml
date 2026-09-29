@@ -9,6 +9,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
 
@@ -33,7 +36,7 @@ jobs:
           sudo apt-get install --yes \
             bash bzip2 clang cmake cpio curl gcc-aarch64-linux-gnu git gzip \
             libbz2-dev liblzma-dev libssl-dev libxml2-dev lld llvm make \
-            patch python3 sed tar xz-utils zlib1g-dev
+            patch python3 sed tar xz-utils zlib1g-dev zstd
           rustup target add \
             aarch64-apple-darwin \
             aarch64-unknown-linux-gnu \
@@ -41,35 +44,24 @@ jobs:
             x86_64-pc-windows-msvc
           rustup component add llvm-tools
 
-      - name: Checkout osxcross
-        uses: actions/checkout@v7
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          repository: tpoechtrager/osxcross
-          ref: 27d21e497c9751d01199c7a226a6faf494c3dd9
-          path: osxcross
+          role-to-assume: arn:aws:iam::707241054938:role/dependaconf-build
+          aws-region: eu-west-1
+          role-session-name: dependaconf-${{ github.run_id }}
 
       - name: Download macOS SDK
-        env:
-          MACOS_SDK_URL: ${{ secrets.MACOS_SDK_URL }}
         run: |
-          if [[ -z "$MACOS_SDK_URL" ]]; then
-            echo "Set the MACOS_SDK_URL Actions secret to an authorized macOS SDK archive URL."
-            exit 1
-          fi
+          aws s3 cp \
+            s3://dependaconf-public/osxcross/toolchains/osxcross-27d21e4977c9751d01199c7a226a6faf494c3dd9-MacOSX26-arm64-stable.tar.zst \
+            osxcross/ \
+            --only-show-errors
+          tar -xf osxcross/osxcross-27d21e4977c9751d01199c7a226a6faf494c3dd9-MacOSX26-arm64-stable.tar.zst
 
-          sdk_filename="$(basename "${MACOS_SDK_URL%%\?*}")"
-          if [[ "$sdk_filename" != MacOSX*.sdk.tar.* ]]; then
-            echo "MACOS_SDK_URL must end with the original MacOSX*.sdk.tar.* archive filename."
-            exit 1
-          fi
-          curl --fail --show-error --location --retry 3 \
-            "$MACOS_SDK_URL" \
-            --output "osxcross/tarballs/$sdk_filename"
-
-      - name: Build osxcross
+      - name: Get MacOS Linker
         run: |
           cd osxcross
-          UNATTENDED=1 BUILD_FLAVOR=llvm ENABLE_ARCHS=arm64 ./build.sh
 
           linker="$(find "$PWD/target/bin" -maxdepth 1 \
             -name 'arm64-apple-darwin*-clang' -print -quit)"
