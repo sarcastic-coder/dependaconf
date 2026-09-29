@@ -63,7 +63,7 @@ jobs:
         run: |
           cd dependaconf-osxcross
 
-          linker="$(find "$PWD/target/bin" -maxdepth 1 \
+          linker="$(find "$PWD/bin" -maxdepth 1 \
             -name 'arm64-apple-darwin*-clang' -print -quit)"
           if [[ -z "$linker" ]]; then
             echo "Could not find the osxcross ARM64 Darwin clang wrapper."
