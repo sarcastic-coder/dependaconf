@@ -55,13 +55,12 @@ jobs:
         run: |
           aws s3 cp \
             s3://dependaconf-public/osxcross/toolchains/osxcross-27d21e4977c9751d01199c7a226a6faf494c3dd9-MacOSX26-arm64-stable.tar.zst \
-            osxcross/ \
             --only-show-errors
           tar -xf osxcross/osxcross-27d21e4977c9751d01199c7a226a6faf494c3dd9-MacOSX26-arm64-stable.tar.zst
 
       - name: Get MacOS Linker
         run: |
-          cd osxcross
+          cd dependabot-osxcross
 
           linker="$(find "$PWD/target/bin" -maxdepth 1 \
             -name 'arm64-apple-darwin*-clang' -print -quit)"
