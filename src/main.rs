@@ -33,8 +33,13 @@ struct NpmPackageLock {
 #[derive(serde::Deserialize)]
 struct LockedPackage {
     name: Option<String>,
+
     #[serde(default)]
     dependencies: HashMap<String, String>,
+
+    #[serde(rename = "devDependencies", default)]
+    dev_dependencies: HashMap<String, String>,
+
     #[serde(rename = "peerDependencies", default)]
     peer_dependencies: HashMap<String, String>,
 }
@@ -123,8 +128,14 @@ fn read_npm_dependency_metadata(
         )
     })?;
 
-    root_package
+    let dependencies: HashMap<String, String> = root_package
         .dependencies
+        .clone()
+        .into_iter()
+        .chain(root_package.dev_dependencies.clone())
+        .collect();
+
+    dependencies
         .keys()
         .map(|name| {
             let package_key = format!("node_modules/{name}");
