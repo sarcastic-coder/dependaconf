@@ -1,9 +1,19 @@
 # dependaconf
 
-`dependaconf` generates a grouped Dependabot configuration for an npm project.
-It uses the project's `package-lock.json` to group direct dependencies that
-share installed peer dependencies, and groups remaining scoped dependencies
-together.
+`dependaconf` helps you tame Dependabot for npm projects.
+
+Most npm repos end up with a noisy Dependabot setup: unrelated updates land in
+one big stream, and reviewers have to sort through a lot of churn to find the
+changes that matter. `dependaconf` analyzes your `package-lock.json` and builds a
+clearer update strategy:
+
+- direct dependencies that share installed peer dependencies are grouped together
+- remaining packages are grouped by npm scope
+- the resulting config is written to `.github/dependabot.yml` for you
+
+The result is fewer, cleaner, more coherent pull requests. That means less
+review overhead, easier dependency maintenance, and a much smoother path to
+keeping your project current without drowning in update noise.
 
 ## Install
 
