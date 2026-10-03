@@ -1,25 +1,27 @@
 # dependaconf
 
-`dependaconf` helps you tame Dependabot for npm projects.
+Smarter Dependabot grouping for npm projects.
 
-Most npm repos end up with a noisy Dependabot setup: unrelated updates land in
-one big stream, and reviewers have to sort through a lot of churn to find the
-changes that matter. `dependaconf` analyzes your `package-lock.json` and builds a
-clearer update strategy:
+If your project has a lot of dependencies, Dependabot can become noisy fast:
+large update batches, mixed concerns, and a lot of review churn. `dependaconf`
+helps you cut through that by generating a cleaner, more intentional dependency
+strategy from your `package-lock.json`.
 
-- direct dependencies that share installed peer dependencies are grouped together
-- remaining packages are grouped by npm scope
-- the resulting config is written to `.github/dependabot.yml` for you
+It groups:
 
-The result is fewer, cleaner, more coherent pull requests. That means less
-review overhead, easier dependency maintenance, and a much smoother path to
-keeping your project current without drowning in update noise.
+- direct dependencies that share installed peer dependencies
+- remaining packages by npm scope
+- the result into `.github/dependabot.yml`
+
+The outcome is simpler review flow, fewer noisy PRs, and a much easier way to
+keep the project secure and up to date without drowning in update noise.
 
 ## Install
 
-Download and install the matching binary below. The install commands do not
-change your shell configuration: you can run the binary from its install
-location, or optionally add that location to your `PATH` in the next section.
+Download the matching binary for your platform below. The install commands do
+not change your shell configuration; you can run the binary from its install
+location, or add that location to your `PATH` in the next section.
+
 Release binaries are available for Apple Silicon macOS, ARM64 and x86_64 Linux,
 and x86_64 Windows. Intel macOS is not currently supported.
 
@@ -63,9 +65,8 @@ Invoke-WebRequest `
 
 ### Optional: Add the install directory to `PATH`
 
-To run `dependaconf` without typing its full path in new terminals, append the
-PATH export for your install directory to your shell's startup file. Run the
-block for your platform and shell.
+To run `dependaconf` without typing its full path in new terminals, add the
+install directory to your shell startup file.
 
 On macOS with zsh (`~/bin`):
 
@@ -91,8 +92,8 @@ export PATH="$HOME/.local/bin:$PATH"
 dependaconf --version
 ```
 
-On Windows, run this in PowerShell to add `~/bin` to your user `Path` and to
-the current window:
+On Windows, run this in PowerShell to add `~/bin` to your user `Path` and the
+current window:
 
 ```powershell
 $bin = Join-Path $HOME 'bin'
@@ -116,9 +117,8 @@ The resulting binary is `target/release/dependaconf` (or
 
 ## Usage
 
-Once the binary is installed and on your `PATH`, run `dependaconf` from the root
-of an npm project that contains both `package.json` and `package-lock.json`.
-If you skipped adding it to `PATH`, you can still invoke it by its full path.
+Once the binary is available, run `dependaconf` from the root of an npm project
+that contains both `package.json` and `package-lock.json`.
 
 ```sh
 cd path/to/your-npm-project
