@@ -19,9 +19,6 @@ updates:
       - '@types/react-dom'
       - react
       - react-dom
-    types:
-      patterns:
-      - '@types/node'
     vite:
       patterns:
       - '@vitejs/plugin-react'

@@ -177,6 +177,7 @@ fn group_npm_dependencies(dependencies: &[NpmDependency]) -> HashMap<String, Vec
         members.sort();
         members.dedup();
     }
+    groups.retain(|_, members| members.len() > 1);
 
     groups
 }
@@ -513,7 +514,7 @@ mod tests {
                 groups.get("@acme/core"),
                 Some(&vec!["@acme/core".to_string(), "@acme/plugin".to_string()])
             );
-            assert_eq!(groups.get("@acme"), Some(&vec!["@acme/other".to_string()]));
+            assert!(!groups.contains_key("@acme"));
         }
 
         #[test]
@@ -642,7 +643,7 @@ mod tests {
                 groups.get("express"),
                 Some(&vec!["@types/express".to_string(), "express".to_string()])
             );
-            assert_eq!(groups.get("@types"), Some(&vec!["@types/node".to_string()]));
+            assert!(!groups.contains_key("@types"));
         }
 
         #[test]
@@ -667,6 +668,25 @@ mod tests {
                     "@types/acme__core".to_string()
                 ])
             );
+        }
+
+        #[test]
+        fn does_not_create_groups_with_only_one_member() {
+            let dependencies = vec![
+                NpmDependency {
+                    name: "@acme/standalone".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@types/node".to_string(),
+                    peer_dependencies: vec![],
+                },
+            ];
+
+            let groups = group_npm_dependencies(&dependencies);
+
+            assert!(groups.values().all(|members| members.len() >= 2));
+            assert!(groups.is_empty());
         }
     }
 

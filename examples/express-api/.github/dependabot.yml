@@ -13,6 +13,3 @@ updates:
       patterns:
       - '@types/express'
       - express
-    types:
-      patterns:
-      - '@types/node'
