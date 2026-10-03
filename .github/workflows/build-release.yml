@@ -75,7 +75,15 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "$PWD/bin" >> "$GITHUB_PATH"
 
+      - name: Cache cargo-xwin
+        id: cargo-xwin-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-xwin
+          key: ${{ runner.os }}-cargo-xwin-0.23.1
+
       - name: Install cargo-xwin
+        if: steps.cargo-xwin-cache.outputs.cache-hit != 'true'
         run: cargo install --locked --version 0.23.1 cargo-xwin
 
       - name: Build all targets
