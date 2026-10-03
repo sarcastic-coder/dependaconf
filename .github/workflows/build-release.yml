@@ -70,6 +70,7 @@ jobs:
             exit 1
           fi
           echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=$linker" >> "$GITHUB_ENV"
+          echo "$PWD/bin" >> "$GITHUB_PATH"
 
       - name: Install cargo-xwin
         run: cargo install --locked --version 0.23.1 cargo-xwin
@@ -169,4 +170,3 @@ jobs:
               --repo="$GITHUB_REPOSITORY" \
               --title="${GITHUB_REPOSITORY#*/} $VERSION" \
               --generate-notes
-
