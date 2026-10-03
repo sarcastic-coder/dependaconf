@@ -1,0 +1,14 @@
+version: 2
+updates:
+- package-ecosystem: npm
+  directory: /
+  schedule:
+    interval: weekly
+  groups:
+    typescript-vue-vite:
+      patterns:
+      - '@vitejs/plugin-vue'
+      - typescript
+      - vite
+      - vue
+      - vue-router
