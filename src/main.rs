@@ -248,11 +248,11 @@ fn common_peer_root(group: &str) -> String {
     });
     let root = common_prefix.trim_end_matches(|character: char| !character.is_ascii_alphanumeric());
 
-    assert!(
-        !root.is_empty(),
-        "peer groups must share a common name root"
-    );
-    root.to_string()
+    if root.is_empty() {
+        group.replace('+', "-")
+    } else {
+        root.to_string()
+    }
 }
 
 fn write_dependabot_config<W: Write>(
@@ -535,6 +535,11 @@ mod tests {
         fn uses_common_peer_name_root_for_group_identifier() {
             assert_eq!(dependabot_group_identifier("react+react-dom"), "react");
             assert_eq!(dependabot_group_identifier("@acme"), "acme");
+        }
+
+        #[test]
+        fn uses_all_peer_names_when_group_has_no_common_name_root() {
+            assert_eq!(dependabot_group_identifier("react+vite"), "react-vite");
         }
 
         #[test]

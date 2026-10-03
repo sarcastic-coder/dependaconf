@@ -1,0 +1,28 @@
+version: 2
+updates:
+- package-ecosystem: npm
+  directory: /
+  schedule:
+    interval: weekly
+  groups:
+    eslint-typescript:
+      patterns:
+      - '@eslint/js'
+      - eslint
+      - eslint-plugin-react-hooks
+      - eslint-plugin-react-refresh
+      - typescript
+      - typescript-eslint
+    react:
+      patterns:
+      - react
+      - react-dom
+    types-node-vite:
+      patterns:
+      - '@types/node'
+      - '@vitejs/plugin-react'
+      - vite
+    types-react:
+      patterns:
+      - '@types/react'
+      - '@types/react-dom'
