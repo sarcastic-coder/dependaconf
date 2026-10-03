@@ -202,6 +202,7 @@ fn merge_overlapping_peer_groups(
             groups[index].0.push('+');
             groups[index].0.push_str(&other_peer);
             groups[index].1.extend(other_members);
+            other_index = index + 1;
         }
         index += 1;
     }
@@ -499,6 +500,44 @@ mod tests {
                     "react-dom".to_string(),
                     "react-scripts".to_string(),
                     "styled-components".to_string(),
+                ]
+            );
+        }
+
+        #[test]
+        fn merges_peer_groups_when_an_earlier_merge_creates_an_overlap() {
+            let groups = HashMap::from([
+                (
+                    "typescript".to_string(),
+                    vec!["typescript".to_string(), "vue".to_string()],
+                ),
+                (
+                    "vite".to_string(),
+                    vec!["vite".to_string(), "@vitejs/plugin-vue".to_string()],
+                ),
+                (
+                    "vue".to_string(),
+                    vec![
+                        "vue".to_string(),
+                        "vue-router".to_string(),
+                        "@vitejs/plugin-vue".to_string(),
+                    ],
+                ),
+            ]);
+
+            let merged = merge_overlapping_peer_groups(groups);
+
+            assert_eq!(merged.len(), 1);
+            let mut members = merged.values().next().unwrap().clone();
+            members.sort();
+            assert_eq!(
+                members,
+                vec![
+                    "@vitejs/plugin-vue".to_string(),
+                    "typescript".to_string(),
+                    "vite".to_string(),
+                    "vue".to_string(),
+                    "vue-router".to_string(),
                 ]
             );
         }
