@@ -76,6 +76,7 @@ fn common_peer_root(group: &str) -> String {
 
 fn write_config<W: Write>(
     writer: W,
+    package_ecosystem: &str,
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let updates = groups_by_workspace
@@ -102,7 +103,7 @@ fn write_config<W: Write>(
             }
 
             Ok(DependabotUpdate {
-                package_ecosystem: "npm".to_string(),
+                package_ecosystem: package_ecosystem.to_string(),
                 directory: if workspace.is_empty() {
                     "/".to_string()
                 } else {
@@ -127,6 +128,7 @@ fn write_config<W: Write>(
 
 pub(super) fn write_config_file(
     path: &Path,
+    package_ecosystem: &str,
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path
@@ -135,7 +137,7 @@ pub(super) fn write_config_file(
     {
         std::fs::create_dir_all(parent)?;
     }
-    write_config(File::create(path)?, groups_by_workspace)?;
+    write_config(File::create(path)?, package_ecosystem, groups_by_workspace)?;
 
     Ok(())
 }
@@ -186,7 +188,7 @@ mod tests {
     fn serializes_dependency_groups_to_dependabot_yaml() {
         let mut output = Vec::new();
 
-        write_config(&mut output, &sample_groups()).unwrap();
+        write_config(&mut output, "npm", &sample_groups()).unwrap();
 
         let contents = String::from_utf8(output).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -224,7 +226,7 @@ mod tests {
         ]);
         let mut output = Vec::new();
 
-        write_config(&mut output, &groups_by_workspace).unwrap();
+        write_config(&mut output, "npm", &groups_by_workspace).unwrap();
 
         let contents = String::from_utf8(output).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -250,11 +252,23 @@ mod tests {
     }
 
     #[test]
+    fn serializes_the_requested_package_ecosystem() {
+        let mut output = Vec::new();
+
+        write_config(&mut output, "cargo", &sample_groups()).unwrap();
+
+        let contents = String::from_utf8(output).unwrap();
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+
+        assert_eq!(config["updates"][0]["package-ecosystem"], "cargo");
+    }
+
+    #[test]
     fn writes_config_file_and_creates_parent_directory() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join(".github/dependabot.yml");
 
-        write_config_file(&config_path, &sample_groups()).unwrap();
+        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
 
         assert!(config_path.is_file());
     }
