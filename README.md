@@ -116,35 +116,57 @@ The resulting binary is `target/release/dependaconf` (or
 
 ## Usage
 
-With the binary on your `PATH`, run `dependaconf` from the root of an npm
-project containing both `package.json` and `package-lock.json`. Or run the
-binary by its full path if you did not add it to `PATH`.
+Once the binary is installed and on your `PATH`, run `dependaconf` from the root
+of an npm project that contains both `package.json` and `package-lock.json`.
+If you skipped adding it to `PATH`, you can still invoke it by its full path.
 
 ```sh
 cd path/to/your-npm-project
 dependaconf
 ```
 
-The lockfile must use version 2 or 3. The program creates
-`.github/dependabot.yml` and the `.github` directory if needed. It groups
-dependencies by installed peer dependencies, then by npm scope.
+Example generated config:
 
-When the config already exists, dependaconf merges generated groups into entries
-with the same ecosystem and directory. Same-named groups are replaced; other
-groups and settings are preserved. Missing entries are added.
+```yaml
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      react-ecosystem:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+      tooling:
+        patterns:
+          - "@babel/*"
+          - "eslint*"
+```
 
-For npm workspaces, the root and each workspace package are handled separately,
-so dependencies from different directories are not grouped together.
+`dependaconf` expects a lockfile in npm format v2 or v3. It creates
+`.github/dependabot.yml` and the `.github` directory if needed, then writes a
+configuration that groups dependencies by installed peer dependencies and, for
+remaining packages, by npm scope.
 
-For a monorepo where you want one Dependabot update entry at the repository
-root, run:
+If a Dependabot config already exists, the tool merges its generated groups into
+matching ecosystem/directory entries. Same-named groups are replaced, while
+other groups and settings are preserved. Missing entries are added
+automatically.
+
+For npm workspaces, the root package and each workspace are processed
+separately, so dependencies from different directories are not grouped together.
+
+If you want a single repository-root Dependabot entry for a monorepo, run:
 
 ```sh
 dependaconf --combine-workspaces
 ```
 
-This combines matching dependency groups across the root package and all npm
-workspaces into that single entry.
+This combines matching dependency groups from the root package and all npm
+workspaces into one update entry.
 
 Use `dependaconf --help` to display command-line help, or `dependaconf --version`
 to print the version.
