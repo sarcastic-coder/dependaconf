@@ -115,6 +115,44 @@ cargo build --release
 The resulting binary is `target/release/dependaconf` (or
 `target/release/dependaconf.exe` on Windows).
 
+## Upgrade
+
+To upgrade an existing installation, reinstall the latest release binary for
+your platform using the same install steps above. If you installed the binary in
+`~/bin` or `~/.local/bin`, replace the existing file with the newer one and keep
+it executable.
+
+For example, on macOS:
+
+```sh
+curl -fL https://github.com/sarcastic-coder/dependaconf/releases/latest/download/dependaconf-aarch64-apple-darwin \
+  -o "$HOME/bin/dependaconf"
+chmod +x "$HOME/bin/dependaconf"
+```
+
+Or on Linux:
+
+```sh
+curl -fL "https://github.com/sarcastic-coder/dependaconf/releases/latest/download/dependaconf-$(uname -m | sed 's/arm64/aarch64/')-unknown-linux-gnu" \
+  -o "$HOME/.local/bin/dependaconf"
+chmod +x "$HOME/.local/bin/dependaconf"
+```
+
+Or on Windows PowerShell:
+
+```powershell
+$bin = Join-Path $HOME 'bin'
+Invoke-WebRequest `
+  -Uri 'https://github.com/sarcastic-coder/dependaconf/releases/latest/download/dependaconf-x86_64-pc-windows-msvc.exe' `
+  -OutFile (Join-Path $bin 'dependaconf.exe')
+```
+
+If you built from source, upgrade by rebuilding locally:
+
+```sh
+cargo build --release
+```
+
 ## Usage
 
 Once the binary is available, run `dependaconf` from the root of an npm project
