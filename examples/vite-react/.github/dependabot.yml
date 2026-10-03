@@ -15,14 +15,14 @@ updates:
       - typescript-eslint
     react:
       patterns:
-      - react
-      - react-dom
-    types-node-vite:
-      patterns:
-      - '@types/node'
-      - '@vitejs/plugin-react'
-      - vite
-    types-react:
-      patterns:
       - '@types/react'
       - '@types/react-dom'
+      - react
+      - react-dom
+    types:
+      patterns:
+      - '@types/node'
+    vite:
+      patterns:
+      - '@vitejs/plugin-react'
+      - vite

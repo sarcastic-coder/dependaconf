@@ -44,7 +44,7 @@ struct LockedPackage {
     peer_dependencies: HashMap<String, String>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct NpmDependency {
     name: String,
     peer_dependencies: Vec<String>,
@@ -155,15 +155,23 @@ fn read_npm_dependency_metadata(
 }
 
 fn group_npm_dependencies(dependencies: &[NpmDependency]) -> HashMap<String, Vec<String>> {
-    let mut groups = merge_overlapping_peer_groups(group_npm_dependencies_by_peer(dependencies));
+    let regular_dependencies: Vec<_> = dependencies
+        .iter()
+        .filter(|dependency| !dependency.name.starts_with("@types/"))
+        .cloned()
+        .collect();
+    let mut groups =
+        merge_overlapping_peer_groups(group_npm_dependencies_by_peer(&regular_dependencies));
     let peer_members: std::collections::HashSet<_> = groups.values().flatten().cloned().collect();
 
-    for (scope, mut members) in group_npm_dependencies_by_scope(dependencies) {
+    for (scope, mut members) in group_npm_dependencies_by_scope(&regular_dependencies) {
         members.retain(|member| !peer_members.contains(member));
         if !members.is_empty() {
             groups.entry(scope).or_insert_with(Vec::new).extend(members);
         }
     }
+
+    group_npm_dependencies_by_types(&mut groups, dependencies);
 
     for members in groups.values_mut() {
         members.sort();
@@ -171,6 +179,50 @@ fn group_npm_dependencies(dependencies: &[NpmDependency]) -> HashMap<String, Vec
     }
 
     groups
+}
+
+fn group_npm_dependencies_by_types(
+    groups: &mut HashMap<String, Vec<String>>,
+    dependencies: &[NpmDependency],
+) {
+    let installed: std::collections::HashSet<_> = dependencies
+        .iter()
+        .map(|dependency| dependency.name.as_str())
+        .collect();
+    let mut unmatched_types = Vec::new();
+
+    for dependency in dependencies
+        .iter()
+        .filter(|dependency| dependency.name.starts_with("@types/"))
+    {
+        let type_name = dependency.name.trim_start_matches("@types/");
+        let implementation = match type_name.split_once("__") {
+            Some((scope, name)) => format!("@{scope}/{name}"),
+            None => type_name.to_string(),
+        };
+
+        if !installed.contains(implementation.as_str()) {
+            unmatched_types.push(dependency.name.clone());
+            continue;
+        }
+
+        let target_group = groups
+            .iter()
+            .find(|(_, members)| members.iter().any(|member| member == &implementation))
+            .map(|(group, _)| group.clone())
+            .unwrap_or_else(|| implementation.clone());
+        let members = groups
+            .entry(target_group)
+            .or_insert_with(|| vec![implementation]);
+        members.push(dependency.name.clone());
+    }
+
+    if !unmatched_types.is_empty() {
+        groups
+            .entry("@types".to_string())
+            .or_default()
+            .extend(unmatched_types);
+    }
 }
 
 fn merge_overlapping_peer_groups(
@@ -539,6 +591,81 @@ mod tests {
                     "vue".to_string(),
                     "vue-router".to_string(),
                 ]
+            );
+        }
+
+        #[test]
+        fn groups_types_with_their_implementation_packages() {
+            let dependencies = vec![
+                NpmDependency {
+                    name: "react".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "react-dom".to_string(),
+                    peer_dependencies: vec!["react".to_string()],
+                },
+                NpmDependency {
+                    name: "@types/react".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@types/react-dom".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "express".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@types/express".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@types/node".to_string(),
+                    peer_dependencies: vec![],
+                },
+            ];
+
+            let groups = group_npm_dependencies(&dependencies);
+
+            assert_eq!(
+                groups.get("react"),
+                Some(&vec![
+                    "@types/react".to_string(),
+                    "@types/react-dom".to_string(),
+                    "react".to_string(),
+                    "react-dom".to_string(),
+                ])
+            );
+            assert_eq!(
+                groups.get("express"),
+                Some(&vec!["@types/express".to_string(), "express".to_string()])
+            );
+            assert_eq!(groups.get("@types"), Some(&vec!["@types/node".to_string()]));
+        }
+
+        #[test]
+        fn maps_scoped_types_packages_to_scoped_implementations() {
+            let dependencies = vec![
+                NpmDependency {
+                    name: "@acme/core".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@types/acme__core".to_string(),
+                    peer_dependencies: vec![],
+                },
+            ];
+
+            let groups = group_npm_dependencies(&dependencies);
+
+            assert_eq!(
+                groups.get("@acme"),
+                Some(&vec![
+                    "@acme/core".to_string(),
+                    "@types/acme__core".to_string()
+                ])
             );
         }
     }

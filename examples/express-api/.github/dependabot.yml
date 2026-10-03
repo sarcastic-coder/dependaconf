@@ -5,8 +5,14 @@ updates:
   schedule:
     interval: weekly
   groups:
-    types:
+    cors:
       patterns:
       - '@types/cors'
+      - cors
+    express:
+      patterns:
       - '@types/express'
+      - express
+    types:
+      patterns:
       - '@types/node'
