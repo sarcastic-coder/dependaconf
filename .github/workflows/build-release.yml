@@ -35,7 +35,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes \
             bash bzip2 clang cmake cpio curl gcc-aarch64-linux-gnu git gzip \
-            libbz2-dev liblzma-dev libssl-dev libxml2-dev libxar1 lld llvm \
+            libbz2-dev liblzma-dev libssl-dev libxml2-dev lld llvm \
             make patch python3 sed tar xz-utils zlib1g-dev zstd
           rustup target add \
             aarch64-apple-darwin \
@@ -69,7 +69,10 @@ jobs:
             echo "Could not find the osxcross ARM64 Darwin clang wrapper."
             exit 1
           fi
-          echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=$linker" >> "$GITHUB_ENV"
+          {
+            echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=$linker"
+            echo "LD_LIBRARY_PATH=$PWD/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          } >> "$GITHUB_ENV"
           echo "$PWD/bin" >> "$GITHUB_PATH"
 
       - name: Install cargo-xwin
