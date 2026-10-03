@@ -78,7 +78,26 @@ fn write_config<W: Write>(
     writer: W,
     package_ecosystem: &str,
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
+    combine_workspaces: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let groups_by_workspace = if combine_workspaces {
+        let mut combined_groups = BTreeMap::<String, Vec<String>>::new();
+        for groups in groups_by_workspace.values() {
+            for (group, patterns) in groups {
+                combined_groups
+                    .entry(group.clone())
+                    .or_default()
+                    .extend(patterns.iter().cloned());
+            }
+        }
+        for patterns in combined_groups.values_mut() {
+            patterns.sort();
+            patterns.dedup();
+        }
+        BTreeMap::from([(String::new(), combined_groups.into_iter().collect())])
+    } else {
+        groups_by_workspace.clone()
+    };
     let updates = groups_by_workspace
         .iter()
         .map(|(workspace, groups)| {
@@ -130,6 +149,7 @@ pub(super) fn write_config_file(
     path: &Path,
     package_ecosystem: &str,
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
+    combine_workspaces: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path
         .parent()
@@ -137,7 +157,12 @@ pub(super) fn write_config_file(
     {
         std::fs::create_dir_all(parent)?;
     }
-    write_config(File::create(path)?, package_ecosystem, groups_by_workspace)?;
+    write_config(
+        File::create(path)?,
+        package_ecosystem,
+        groups_by_workspace,
+        combine_workspaces,
+    )?;
 
     Ok(())
 }
@@ -188,7 +213,7 @@ mod tests {
     fn serializes_dependency_groups_to_dependabot_yaml() {
         let mut output = Vec::new();
 
-        write_config(&mut output, "npm", &sample_groups()).unwrap();
+        write_config(&mut output, "npm", &sample_groups(), false).unwrap();
 
         let contents = String::from_utf8(output).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -226,7 +251,7 @@ mod tests {
         ]);
         let mut output = Vec::new();
 
-        write_config(&mut output, "npm", &groups_by_workspace).unwrap();
+        write_config(&mut output, "npm", &groups_by_workspace, false).unwrap();
 
         let contents = String::from_utf8(output).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -255,7 +280,7 @@ mod tests {
     fn serializes_the_requested_package_ecosystem() {
         let mut output = Vec::new();
 
-        write_config(&mut output, "cargo", &sample_groups()).unwrap();
+        write_config(&mut output, "cargo", &sample_groups(), false).unwrap();
 
         let contents = String::from_utf8(output).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -268,8 +293,53 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join(".github/dependabot.yml");
 
-        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
+        write_config_file(&config_path, "npm", &sample_groups(), false).unwrap();
 
         assert!(config_path.is_file());
+    }
+
+    #[test]
+    fn combines_workspaces_into_one_update_with_merged_groups() {
+        let groups_by_workspace = BTreeMap::from([
+            (
+                "packages/client".to_string(),
+                HashMap::from([
+                    (
+                        "graphql".to_string(),
+                        vec!["@apollo/client".to_string(), "graphql".to_string()],
+                    ),
+                    ("react".to_string(), vec!["react".to_string()]),
+                ]),
+            ),
+            (
+                "packages/server".to_string(),
+                HashMap::from([(
+                    "graphql".to_string(),
+                    vec!["@apollo/server".to_string(), "graphql".to_string()],
+                )]),
+            ),
+        ]);
+        let mut output = Vec::new();
+
+        write_config(&mut output, "npm", &groups_by_workspace, true).unwrap();
+
+        let contents = String::from_utf8(output).unwrap();
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+        let updates = config["updates"].as_sequence().unwrap();
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["directory"], "/");
+        assert_eq!(
+            updates[0]["groups"]["graphql"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![
+                serde_yaml_ng::Value::String("@apollo/client".to_string()),
+                serde_yaml_ng::Value::String("@apollo/server".to_string()),
+                serde_yaml_ng::Value::String("graphql".to_string()),
+            ])
+        );
+        assert_eq!(
+            updates[0]["groups"]["react"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::String("react".to_string())])
+        );
     }
 }

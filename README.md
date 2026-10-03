@@ -125,5 +125,15 @@ are considered separately. Dependabot update entries and groups are scoped to
 each package directory so dependencies from different workspaces are not grouped
 together.
 
+For a monorepo where you want one Dependabot update entry at the repository
+root, run:
+
+```sh
+dependaconf --combine-workspaces
+```
+
+This combines matching dependency groups across the root package and all npm
+workspaces into that single entry.
+
 Use `dependaconf --help` to display command-line help, or `dependaconf --version`
 to print the version.
