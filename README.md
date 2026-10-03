@@ -116,14 +116,15 @@ dependaconf
 ```
 
 The lockfile must use version 2 or 3. The program creates
-`.github/dependabot.yml`, creating the `.github` directory if needed. Running
-it again replaces that file. The generated configuration enables weekly npm
-updates and groups dependencies by installed peer dependencies and, for
-remaining packages, npm scope.
-For npm workspaces, direct dependencies from the root and each workspace package
-are considered separately. Dependabot update entries and groups are scoped to
-each package directory so dependencies from different workspaces are not grouped
-together.
+`.github/dependabot.yml` and the `.github` directory if needed. It groups
+dependencies by installed peer dependencies, then by npm scope.
+
+When the config already exists, dependaconf merges generated groups into entries
+with the same ecosystem and directory. Same-named groups are replaced; other
+groups and settings are preserved. Missing entries are added.
+
+For npm workspaces, the root and each workspace package are handled separately,
+so dependencies from different directories are not grouped together.
 
 For a monorepo where you want one Dependabot update entry at the repository
 root, run:

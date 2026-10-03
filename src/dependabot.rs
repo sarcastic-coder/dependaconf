@@ -157,12 +157,88 @@ pub(super) fn write_config_file(
     {
         std::fs::create_dir_all(parent)?;
     }
+    let mut generated = Vec::new();
     write_config(
-        File::create(path)?,
+        &mut generated,
         package_ecosystem,
         groups_by_workspace,
         combine_workspaces,
     )?;
+    let generated: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&generated)?;
+
+    let contents = if path.exists() {
+        let contents = std::fs::read_to_string(path)?;
+        let mut existing: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents)?;
+        merge_generated_groups(&mut existing, generated)?;
+        existing
+    } else {
+        generated
+    };
+
+    let mut file = File::create(path)?;
+    serde_yaml_ng::to_writer(&mut file, &contents)?;
+    file.flush()?;
+
+    Ok(())
+}
+
+fn merge_generated_groups(
+    existing: &mut serde_yaml_ng::Value,
+    generated: serde_yaml_ng::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use serde_yaml_ng::{Mapping, Value};
+
+    let invalid_config = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "existing Dependabot config must be a mapping with an updates sequence",
+        )
+    };
+    let existing = existing.as_mapping_mut().ok_or_else(invalid_config)?;
+    let updates_key = Value::String("updates".to_string());
+    let updates = existing
+        .entry(updates_key)
+        .or_insert_with(|| Value::Sequence(Vec::new()))
+        .as_sequence_mut()
+        .ok_or_else(invalid_config)?;
+    let generated_updates = generated["updates"]
+        .as_sequence()
+        .ok_or_else(invalid_config)?;
+
+    for generated_update in generated_updates {
+        let ecosystem = &generated_update["package-ecosystem"];
+        let directory = &generated_update["directory"];
+        let generated_groups = &generated_update["groups"];
+        let matching_update = updates.iter_mut().find(|update| {
+            update["package-ecosystem"] == *ecosystem && update["directory"] == *directory
+        });
+
+        let Some(matching_update) = matching_update else {
+            updates.push(generated_update.clone());
+            continue;
+        };
+        let Some(generated_groups) = generated_groups.as_mapping() else {
+            continue;
+        };
+        let update = matching_update
+            .as_mapping_mut()
+            .ok_or_else(invalid_config)?;
+        let groups_key = Value::String("groups".to_string());
+        let groups = update
+            .entry(groups_key)
+            .or_insert_with(|| Value::Mapping(Mapping::new()))
+            .as_mapping_mut()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "groups in existing Dependabot update must be a mapping",
+                )
+            })?;
+
+        for (name, group) in generated_groups {
+            groups.insert(name.clone(), group.clone());
+        }
+    }
 
     Ok(())
 }
@@ -296,6 +372,69 @@ mod tests {
         write_config_file(&config_path, "npm", &sample_groups(), false).unwrap();
 
         assert!(config_path.is_file());
+    }
+
+    #[test]
+    fn merges_generated_groups_into_existing_matching_updates() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("dependabot.yml");
+        std::fs::write(
+            &config_path,
+            r#"version: 2
+registries:
+  private:
+    type: npm-registry
+    url: https://registry.example.com
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 5
+    groups:
+      custom:
+        patterns: ["custom-*"]
+      acme:
+        patterns: ["old-acme-pattern"]
+"#,
+        )
+        .unwrap();
+
+        write_config_file(&config_path, "npm", &sample_groups(), false).unwrap();
+
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+        let update = &config["updates"][0];
+
+        assert_eq!(config["registries"]["private"]["type"], "npm-registry");
+        assert_eq!(update["schedule"]["interval"], "daily");
+        assert_eq!(update["open-pull-requests-limit"], 5);
+        assert_eq!(update["groups"]["custom"]["patterns"][0], "custom-*");
+        assert_eq!(
+            update["groups"]["acme"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![
+                serde_yaml_ng::Value::String("@acme/core".to_string()),
+                serde_yaml_ng::Value::String("@acme/ui".to_string()),
+            ])
+        );
+        assert_eq!(
+            update["groups"]["react"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![
+                serde_yaml_ng::Value::String("react".to_string()),
+                serde_yaml_ng::Value::String("react-dom".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn does_not_overwrite_an_invalid_existing_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("dependabot.yml");
+        let original = "not: [valid";
+        std::fs::write(&config_path, original).unwrap();
+
+        assert!(write_config_file(&config_path, "npm", &sample_groups(), false).is_err());
+        assert_eq!(std::fs::read_to_string(config_path).unwrap(), original);
     }
 
     #[test]
