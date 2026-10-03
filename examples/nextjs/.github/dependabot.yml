@@ -1,0 +1,19 @@
+version: 2
+updates:
+- package-ecosystem: npm
+  directory: /
+  schedule:
+    interval: weekly
+  groups:
+    eslint-typescript:
+      patterns:
+      - eslint
+      - eslint-config-next
+      - typescript
+    react:
+      patterns:
+      - '@types/react'
+      - '@types/react-dom'
+      - next
+      - react
+      - react-dom
