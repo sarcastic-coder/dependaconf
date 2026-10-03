@@ -120,6 +120,10 @@ The lockfile must use version 2 or 3. The program creates
 it again replaces that file. The generated configuration enables weekly npm
 updates and groups dependencies by installed peer dependencies and, for
 remaining packages, npm scope.
+For npm workspaces, direct dependencies from the root and each workspace package
+are considered separately. Dependabot update entries and groups are scoped to
+each package directory so dependencies from different workspaces are not grouped
+together.
 
 Use `dependaconf --help` to display command-line help, or `dependaconf --version`
 to print the version.

@@ -62,6 +62,7 @@ struct DependabotUpdate {
     package_ecosystem: String,
     directory: String,
     schedule: DependabotSchedule,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     groups: BTreeMap<String, DependabotGroup>,
 }
 
@@ -83,10 +84,17 @@ fn main() -> () {
 
     let ecosystem = detect_ecosystem(current_path);
 
-    let groups: Option<HashMap<String, Vec<String>>> = match ecosystem {
+    let groups: Option<BTreeMap<String, HashMap<String, Vec<String>>>> = match ecosystem {
         Some(Ecosystem::Npm) => {
             let dependencies = read_npm_dependency_metadata(current_path).unwrap();
-            Some(group_npm_dependencies(&dependencies))
+            Some(
+                dependencies
+                    .into_iter()
+                    .map(|(workspace, dependencies)| {
+                        (workspace, group_npm_dependencies(&dependencies))
+                    })
+                    .collect(),
+            )
         }
         None => None,
     };
@@ -106,7 +114,7 @@ fn detect_ecosystem(root: &Path) -> Option<Ecosystem> {
 
 fn read_npm_dependency_metadata(
     root: &Path,
-) -> Result<Vec<NpmDependency>, Box<dyn std::error::Error>> {
+) -> Result<BTreeMap<String, Vec<NpmDependency>>, Box<dyn std::error::Error>> {
     let contents = read_to_string(root.join("package-lock.json"))?;
     let lockfile: NpmPackageLock = serde_json::from_str(&contents)?;
 
@@ -121,37 +129,86 @@ fn read_npm_dependency_metadata(
         .into());
     }
 
-    let root_package = lockfile.packages.get("").ok_or_else(|| {
-        std::io::Error::new(
+    if !lockfile.packages.contains_key("") {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "npm package-lock is missing the root package entry",
         )
-    })?;
+        .into());
+    }
 
-    let dependencies: HashMap<String, String> = root_package
-        .dependencies
-        .clone()
-        .into_iter()
-        .chain(root_package.dev_dependencies.clone())
-        .collect();
-
-    dependencies
-        .keys()
-        .map(|name| {
-            let package_key = format!("node_modules/{name}");
-            let package = lockfile.packages.get(&package_key).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("npm package-lock is missing direct dependency {name}"),
-                )
-            })?;
-
-            Ok(NpmDependency {
-                name: package.name.clone().unwrap_or_else(|| name.clone()),
-                peer_dependencies: package.peer_dependencies.keys().cloned().collect(),
-            })
+    let mut dependencies_by_workspace: BTreeMap<String, Vec<NpmDependency>> = lockfile
+        .packages
+        .iter()
+        .filter(|(path, _)| !path.split('/').any(|component| component == "node_modules"))
+        .flat_map(|(workspace_path, workspace)| {
+            workspace
+                .dependencies
+                .keys()
+                .chain(workspace.dev_dependencies.keys())
+                .map(move |name| (workspace_path, name))
         })
-        .collect()
+        .map(|(workspace_path, name)| {
+            let package = find_npm_dependency_package(&lockfile.packages, workspace_path, name)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("npm package-lock is missing direct dependency {name}"),
+                    )
+                })?;
+
+            Ok((
+                workspace_path.clone(),
+                NpmDependency {
+                    name: package.name.clone().unwrap_or_else(|| name.clone()),
+                    peer_dependencies: package.peer_dependencies.keys().cloned().collect(),
+                },
+            ))
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?
+        .into_iter()
+        .fold(BTreeMap::new(), |mut grouped, (workspace, dependency)| {
+            grouped.entry(workspace).or_default().push(dependency);
+            grouped
+        });
+
+    for workspace_path in lockfile
+        .packages
+        .keys()
+        .filter(|path| !path.split('/').any(|component| component == "node_modules"))
+    {
+        dependencies_by_workspace
+            .entry(workspace_path.clone())
+            .or_default();
+    }
+
+    Ok(dependencies_by_workspace)
+}
+
+fn find_npm_dependency_package<'a>(
+    packages: &'a HashMap<String, LockedPackage>,
+    workspace_path: &str,
+    dependency_name: &str,
+) -> Option<&'a LockedPackage> {
+    let mut directory = workspace_path;
+    loop {
+        let package_path = if directory.is_empty() {
+            format!("node_modules/{dependency_name}")
+        } else {
+            format!("{directory}/node_modules/{dependency_name}")
+        };
+        if let Some(package) = packages.get(&package_path) {
+            return Some(package);
+        }
+
+        if let Some((parent, _)) = directory.rsplit_once('/') {
+            directory = parent;
+        } else if !directory.is_empty() {
+            directory = "";
+        } else {
+            return None;
+        }
+    }
 }
 
 fn group_npm_dependencies(dependencies: &[NpmDependency]) -> HashMap<String, Vec<String>> {
@@ -311,38 +368,49 @@ fn common_peer_root(group: &str) -> String {
 
 fn write_dependabot_config<W: Write>(
     writer: W,
-    groups: &HashMap<String, Vec<String>>,
+    groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut dependabot_groups = BTreeMap::new();
-    for (group, patterns) in groups {
-        let identifier = dependabot_group_identifier(group);
-        if dependabot_groups
-            .insert(
-                identifier,
-                DependabotGroup {
-                    patterns: patterns.clone(),
+    let updates = groups_by_workspace
+        .iter()
+        .map(|(workspace, groups)| {
+            let mut dependabot_groups = BTreeMap::new();
+            for (group, patterns) in groups {
+                let identifier = dependabot_group_identifier(group);
+                if dependabot_groups
+                    .insert(
+                        identifier,
+                        DependabotGroup {
+                            patterns: patterns.clone(),
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "multiple dependency groups produced the same Dependabot identifier",
+                    )
+                    .into());
+                }
+            }
+
+            Ok(DependabotUpdate {
+                package_ecosystem: "npm".to_string(),
+                directory: if workspace.is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("/{workspace}")
                 },
-            )
-            .is_some()
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "multiple dependency groups produced the same Dependabot identifier",
-            )
-            .into());
-        }
-    }
+                schedule: DependabotSchedule {
+                    interval: "weekly".to_string(),
+                },
+                groups: dependabot_groups,
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
 
     let config = DependabotConfig {
         version: 2,
-        updates: vec![DependabotUpdate {
-            package_ecosystem: "npm".to_string(),
-            directory: "/".to_string(),
-            schedule: DependabotSchedule {
-                interval: "weekly".to_string(),
-            },
-            groups: dependabot_groups,
-        }],
+        updates,
     };
     serde_yaml_ng::to_writer(writer, &config)?;
 
@@ -351,7 +419,7 @@ fn write_dependabot_config<W: Write>(
 
 fn write_dependabot_config_file(
     path: &Path,
-    groups: &HashMap<String, Vec<String>>,
+    groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path
         .parent()
@@ -359,7 +427,7 @@ fn write_dependabot_config_file(
     {
         std::fs::create_dir_all(parent)?;
     }
-    write_dependabot_config(File::create(path)?, groups)?;
+    write_dependabot_config(File::create(path)?, groups_by_workspace)?;
 
     Ok(())
 }
@@ -427,11 +495,79 @@ mod tests {
 
             let dependencies = read_npm_dependency_metadata(&root).unwrap();
             let plugin = dependencies
+                .get("")
+                .unwrap()
                 .iter()
                 .find(|dependency| dependency.name == "react-dom")
                 .unwrap();
 
             assert_eq!(plugin.peer_dependencies, vec!["react".to_string()]);
+        }
+
+        #[test]
+        fn reads_direct_dependencies_from_npm_workspace_packages() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let lockfile = r#"{
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {},
+                    "packages/server": {
+                        "dependencies": {
+                            "@apollo/server": "^5.0.0",
+                            "graphql": "^16.0.0"
+                        }
+                    },
+                    "packages/client": {
+                        "dependencies": {
+                            "@apollo/client": "^4.0.0",
+                            "graphql": "^16.0.0"
+                        }
+                    },
+                    "node_modules/@apollo/server": {
+                        "peerDependencies": {
+                            "graphql": "^16.0.0"
+                        }
+                    },
+                    "node_modules/@apollo/client": {
+                        "peerDependencies": {
+                            "graphql": "^16.0.0"
+                        }
+                    },
+                    "node_modules/graphql": {}
+                }
+            }"#;
+            std::fs::write(temp_dir.path().join("package-lock.json"), lockfile).unwrap();
+
+            let dependencies = read_npm_dependency_metadata(temp_dir.path()).unwrap();
+            assert!(dependencies.get("").unwrap().is_empty());
+            assert_eq!(
+                dependencies
+                    .get("packages/client")
+                    .unwrap()
+                    .iter()
+                    .map(|dependency| dependency.name.as_str())
+                    .collect::<std::collections::HashSet<_>>(),
+                std::collections::HashSet::from(["@apollo/client", "graphql"])
+            );
+            assert_eq!(
+                dependencies
+                    .get("packages/server")
+                    .unwrap()
+                    .iter()
+                    .map(|dependency| dependency.name.as_str())
+                    .collect::<std::collections::HashSet<_>>(),
+                std::collections::HashSet::from(["@apollo/server", "graphql"])
+            );
+            for workspace in ["packages/client", "packages/server"] {
+                assert!(
+                    dependencies
+                        .get(workspace)
+                        .unwrap()
+                        .iter()
+                        .filter(|dependency| dependency.name.starts_with("@apollo/"))
+                        .all(|dependency| dependency.peer_dependencies == vec!["graphql"])
+                );
+            }
         }
 
         #[test]
@@ -704,17 +840,20 @@ mod tests {
             patterns: Vec<String>,
         }
 
-        fn sample_groups() -> HashMap<String, Vec<String>> {
-            HashMap::from([
-                (
-                    "@acme".to_string(),
-                    vec!["@acme/core".to_string(), "@acme/ui".to_string()],
-                ),
-                (
-                    "react+react-dom".to_string(),
-                    vec!["react".to_string(), "react-dom".to_string()],
-                ),
-            ])
+        fn sample_groups() -> BTreeMap<String, HashMap<String, Vec<String>>> {
+            BTreeMap::from([(
+                String::new(),
+                HashMap::from([
+                    (
+                        "@acme".to_string(),
+                        vec!["@acme/core".to_string(), "@acme/ui".to_string()],
+                    ),
+                    (
+                        "react+react-dom".to_string(),
+                        vec!["react".to_string(), "react-dom".to_string()],
+                    ),
+                ]),
+            )])
         }
 
         #[test]
@@ -748,6 +887,51 @@ mod tests {
             };
 
             assert_eq!(actual_groups, expected_groups);
+        }
+
+        #[test]
+        fn serializes_each_workspace_as_a_separate_update_directory() {
+            let groups_by_workspace = BTreeMap::from([
+                (
+                    "packages/client".to_string(),
+                    HashMap::from([(
+                        "graphql".to_string(),
+                        vec!["@apollo/client".to_string(), "graphql".to_string()],
+                    )]),
+                ),
+                (
+                    "packages/server".to_string(),
+                    HashMap::from([(
+                        "graphql".to_string(),
+                        vec!["@apollo/server".to_string(), "graphql".to_string()],
+                    )]),
+                ),
+            ]);
+            let mut output = Vec::new();
+
+            write_dependabot_config(&mut output, &groups_by_workspace).unwrap();
+
+            let contents = String::from_utf8(output).unwrap();
+            let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+            let updates = config["updates"].as_sequence().unwrap();
+
+            assert_eq!(updates.len(), 2);
+            assert_eq!(updates[0]["directory"], "/packages/client");
+            assert_eq!(
+                updates[0]["groups"]["graphql"]["patterns"],
+                serde_yaml_ng::Value::Sequence(vec![
+                    serde_yaml_ng::Value::String("@apollo/client".to_string()),
+                    serde_yaml_ng::Value::String("graphql".to_string()),
+                ])
+            );
+            assert_eq!(updates[1]["directory"], "/packages/server");
+            assert_eq!(
+                updates[1]["groups"]["graphql"]["patterns"],
+                serde_yaml_ng::Value::Sequence(vec![
+                    serde_yaml_ng::Value::String("@apollo/server".to_string()),
+                    serde_yaml_ng::Value::String("graphql".to_string()),
+                ])
+            );
         }
 
         #[test]

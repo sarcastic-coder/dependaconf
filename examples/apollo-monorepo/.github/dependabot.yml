@@ -1,0 +1,39 @@
+version: 2
+updates:
+- package-ecosystem: npm
+  directory: /
+  schedule:
+    interval: weekly
+- package-ecosystem: npm
+  directory: /packages/client
+  schedule:
+    interval: weekly
+  groups:
+    graphql-react-react-dom:
+      patterns:
+      - '@apollo/client'
+      - '@types/react'
+      - '@types/react-dom'
+      - graphql
+      - react
+      - react-dom
+    vite:
+      patterns:
+      - '@vitejs/plugin-react'
+      - vite
+- package-ecosystem: npm
+  directory: /packages/server
+  schedule:
+    interval: weekly
+  groups:
+    apollo-server-express-graphql:
+      patterns:
+      - '@apollo/server'
+      - '@as-integrations/express5'
+      - '@types/express'
+      - express
+      - graphql
+    cors:
+      patterns:
+      - '@types/cors'
+      - cors

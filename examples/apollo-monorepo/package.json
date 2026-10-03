@@ -1,0 +1,17 @@
+{
+  "name": "apollo-monorepo-example",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace @example/server",
+    "dev:client": "npm run dev --workspace @example/client",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "~5.7.2"
+  }
+}
