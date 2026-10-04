@@ -17,8 +17,8 @@ struct DependabotUpdate {
     package_ecosystem: String,
     directory: String,
     schedule: DependabotSchedule,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    groups: BTreeMap<String, DependabotGroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    groups: Option<BTreeMap<String, DependabotGroup>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cooldown: Option<DependabotCooldown>,
 }
@@ -146,7 +146,11 @@ fn write_config<W: Write>(
                 schedule: DependabotSchedule {
                     interval: "weekly".to_string(),
                 },
-                groups: dependabot_groups,
+                groups: if dependabot_groups.is_empty() {
+                    None
+                } else {
+                    Some(dependabot_groups)
+                },
             })
         })
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
