@@ -88,10 +88,6 @@ impl DependencyGroups {
             .map(|(workspace, groups)| (workspace.as_str(), groups))
     }
 
-    pub(super) fn len(&self) -> usize {
-        self.0.len()
-    }
-
     pub(super) fn combine_workspaces(&self) -> Result<Self, Error> {
         let mut workspaces_by_pattern = HashMap::<String, std::collections::HashSet<String>>::new();
         for (workspace, groups) in self.iter() {
@@ -250,7 +246,7 @@ mod tests {
             panic!("expected project to be detected");
         };
 
-        assert_eq!(project.groups_by_workspace.len(), 1);
+        assert_eq!(project.groups_by_workspace.iter().count(), 1);
         let groups = project.groups_by_workspace.get("").unwrap();
         assert_eq!(
             groups
