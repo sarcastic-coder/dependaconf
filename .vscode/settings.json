@@ -2,6 +2,6 @@
   "chat.tools.urls.autoApprove": {
     "https://github.com/dependabot": true,
     "https://github.com/dependabot/*": true,
-    "https://docs.github.com/en/code-security/*": true,
+    "https://docs.github.com/*/code-security/*": true,
   }
 }
