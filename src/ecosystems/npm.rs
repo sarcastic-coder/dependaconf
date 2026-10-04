@@ -105,8 +105,7 @@ pub(super) fn dependency_analysis(
         .map(|(workspace, dependencies)| (workspace.clone(), group_npm_dependencies(dependencies)))
         .collect();
     if combine_workspaces {
-        let combined_groups = super::combine_workspace_groups(&groups)?;
-        groups = BTreeMap::from([(String::new(), combined_groups.into_iter().collect())]);
+        groups = groups.combine_workspaces()?;
     }
     let debug_report = include_debug_report.then(|| {
         if combine_workspaces {
@@ -123,8 +122,7 @@ fn render_combined_groups_report(groups_by_workspace: &DependencyGroups) -> Stri
     let groups = groups_by_workspace
         .get("")
         .expect("combined workspace groups must be stored at the repository root");
-    let mut groups = groups.iter().collect::<Vec<_>>();
-    groups.sort_by_key(|(group, _)| *group);
+    let groups = groups.iter().collect::<Vec<_>>();
     let mut report = String::from("Combined workspace groups:\n");
     for (group_index, (group, patterns)) in groups.iter().enumerate() {
         let is_last_group = group_index + 1 == groups.len();
@@ -135,7 +133,7 @@ fn render_combined_groups_report(groups_by_workspace: &DependencyGroups) -> Stri
         };
         let pattern_indent = if is_last_group { "    " } else { "│   " };
         let _ = writeln!(report, "{group_branch}Group: {group}");
-        let mut patterns = (*patterns).clone();
+        let mut patterns = patterns.to_vec();
         patterns.sort();
         for (pattern_index, pattern) in patterns.iter().enumerate() {
             let pattern_branch = if pattern_index + 1 == patterns.len() {
@@ -160,13 +158,7 @@ fn render_dependency_report(
             .get(workspace)
             .into_iter()
             .flat_map(|groups| groups.iter())
-            .map(|(group, members)| {
-                let mut members = members.clone();
-                members.sort();
-                (group.as_str(), members)
-            })
-            .collect::<BTreeMap<_, _>>()
-            .into_iter()
+            .map(|(group, members)| (group, members.to_vec()))
             .collect::<Vec<_>>();
 
         render_workspace_report(&mut report, workspace, dependencies, &groups);
@@ -254,39 +246,25 @@ fn append_group_tree(
         roots.sort();
     }
 
-    let mut visited = std::collections::HashSet::new();
+    let mut tree_report = DependencyTreeReport {
+        output: report,
+        dependencies,
+        members,
+        group,
+        visited: std::collections::HashSet::new(),
+    };
     for (member_index, member) in roots.iter().enumerate() {
-        append_dependency_tree(
-            report,
-            member,
-            dependencies,
-            members,
-            group,
-            child_prefix,
-            member_index + 1 == roots.len(),
-            false,
-            &mut visited,
-        );
+        tree_report.append(member, child_prefix, member_index + 1 == roots.len(), false);
     }
 
     let mut remaining = members
         .iter()
-        .filter(|member| !visited.contains(member.as_str()))
+        .filter(|member| !tree_report.visited.contains(member.as_str()))
         .collect::<Vec<_>>();
     remaining.sort();
     for member in remaining {
-        let is_last_member = visited.len() + 1 == members.len();
-        append_dependency_tree(
-            report,
-            member,
-            dependencies,
-            members,
-            group,
-            child_prefix,
-            is_last_member,
-            false,
-            &mut visited,
-        );
+        let is_last_member = tree_report.visited.len() + 1 == members.len();
+        tree_report.append(member, child_prefix, is_last_member, false);
     }
 }
 
@@ -301,67 +279,60 @@ fn append_ungrouped_dependencies(report: &mut String, dependencies: &[String], i
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn append_dependency_tree(
-    report: &mut String,
-    name: &str,
-    dependencies: &[NpmDependency],
-    members: &[String],
-    group: &str,
-    indent: &str,
-    is_last: bool,
-    is_peer_link: bool,
-    visited: &mut std::collections::HashSet<String>,
-) {
-    let branch = if is_last { "└── " } else { "├── " };
-    let _ = write!(report, "{indent}{branch}{name}");
-    if is_peer_link {
-        let _ = write!(report, " [peer]");
-    }
-    if !visited.insert(name.to_string()) {
-        report.push('\n');
-        return;
-    }
-    if !is_peer_link
-        && let Some(dependency) = dependencies
+struct DependencyTreeReport<'a> {
+    output: &'a mut String,
+    dependencies: &'a [NpmDependency],
+    members: &'a [String],
+    group: &'a str,
+    visited: std::collections::HashSet<String>,
+}
+
+impl DependencyTreeReport<'_> {
+    fn append(&mut self, name: &str, indent: &str, is_last: bool, is_peer_link: bool) {
+        let branch = if is_last { "└── " } else { "├── " };
+        let _ = write!(self.output, "{indent}{branch}{name}");
+        if is_peer_link {
+            let _ = write!(self.output, " [peer]");
+        }
+        if !self.visited.insert(name.to_string()) {
+            self.output.push('\n');
+            return;
+        }
+
+        let dependency = self
+            .dependencies
             .iter()
-            .find(|dependency| dependency.name == name)
-        && let Some(reason) = dependency_group_reason(dependency, group, members)
-    {
-        let _ = write!(report, "{reason}");
-    }
-    report.push('\n');
+            .find(|dependency| dependency.name == name);
+        if !is_peer_link
+            && let Some(dependency) = dependency
+            && let Some(reason) = dependency_group_reason(dependency, self.group, self.members)
+        {
+            let _ = write!(self.output, "{reason}");
+        }
+        self.output.push('\n');
 
-    let Some(dependency) = dependencies
-        .iter()
-        .find(|dependency| dependency.name == name)
-    else {
-        return;
-    };
-    let member_names = members
-        .iter()
-        .map(String::as_str)
-        .collect::<std::collections::HashSet<_>>();
-    let mut peers = dependency
-        .peer_dependencies
-        .iter()
-        .filter(|peer| member_names.contains(peer.as_str()))
-        .collect::<Vec<_>>();
-    peers.sort();
+        let mut peers = {
+            let Some(dependency) = dependency else {
+                return;
+            };
+            let member_names = self
+                .members
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::HashSet<_>>();
+            dependency
+                .peer_dependencies
+                .iter()
+                .filter(|peer| member_names.contains(peer.as_str()))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        peers.sort();
 
-    let child_indent = format!("{indent}{}", if is_last { "    " } else { "│   " });
-    for (peer_index, peer) in peers.iter().enumerate() {
-        append_dependency_tree(
-            report,
-            peer,
-            dependencies,
-            members,
-            group,
-            &child_indent,
-            peer_index + 1 == peers.len(),
-            true,
-            visited,
-        );
+        let child_indent = format!("{indent}{}", if is_last { "    " } else { "│   " });
+        for (peer_index, peer) in peers.iter().enumerate() {
+            self.append(peer, &child_indent, peer_index + 1 == peers.len(), true);
+        }
     }
 }
 
@@ -478,7 +449,7 @@ fn find_npm_dependency_package<'a>(
     }
 }
 
-fn group_npm_dependencies(dependencies: &[NpmDependency]) -> HashMap<String, Vec<String>> {
+fn group_npm_dependencies(dependencies: &[NpmDependency]) -> super::WorkspaceGroups {
     let regular_dependencies: Vec<_> = dependencies
         .iter()
         .filter(|dependency| !dependency.name.starts_with("@types/"))
@@ -497,13 +468,17 @@ fn group_npm_dependencies(dependencies: &[NpmDependency]) -> HashMap<String, Vec
 
     group_npm_dependencies_by_types(&mut groups, dependencies);
 
-    for members in groups.values_mut() {
-        members.sort();
-        members.dedup();
+    let mut workspace_groups = super::WorkspaceGroups::default();
+    for (group, members) in groups {
+        if members.len() > 1 {
+            for member in members {
+                workspace_groups.add_member(&group, &member);
+            }
+        }
     }
-    groups.retain(|_, members| members.len() > 1);
+    workspace_groups.normalize();
 
-    groups
+    workspace_groups
 }
 
 fn group_npm_dependencies_by_types(
@@ -781,7 +756,7 @@ mod tests {
             groups.get("@npm/tea"),
             Some(&vec!["@npm/tea".to_string(), "@npm/tea-latte".to_string()])
         );
-        assert!(!groups.contains_key("@other/unrelated"));
+        assert!(groups.get("@other/unrelated").is_none());
     }
 
     #[test]
@@ -805,9 +780,9 @@ mod tests {
 
         assert_eq!(
             groups.get("@acme/core"),
-            Some(&vec!["@acme/core".to_string(), "@acme/plugin".to_string()])
+            Some(&["@acme/core".to_string(), "@acme/plugin".to_string()][..])
         );
-        assert!(!groups.contains_key("@acme"));
+        assert!(groups.get("@acme").is_none());
     }
 
     #[test]
@@ -839,14 +814,14 @@ mod tests {
 
         assert_eq!(groups.len(), 1);
         assert_eq!(
-            groups.values().next().unwrap(),
-            &vec![
+            groups.iter().next().unwrap().1,
+            &[
                 "@testing-library/react".to_string(),
                 "react".to_string(),
                 "react-dom".to_string(),
                 "react-scripts".to_string(),
                 "styled-components".to_string(),
-            ]
+            ][..]
         );
     }
 
@@ -925,18 +900,20 @@ mod tests {
 
         assert_eq!(
             groups.get("react"),
-            Some(&vec![
-                "@types/react".to_string(),
-                "@types/react-dom".to_string(),
-                "react".to_string(),
-                "react-dom".to_string(),
-            ])
+            Some(
+                &[
+                    "@types/react".to_string(),
+                    "@types/react-dom".to_string(),
+                    "react".to_string(),
+                    "react-dom".to_string(),
+                ][..]
+            )
         );
         assert_eq!(
             groups.get("express"),
-            Some(&vec!["@types/express".to_string(), "express".to_string()])
+            Some(&["@types/express".to_string(), "express".to_string()][..])
         );
-        assert!(!groups.contains_key("@types"));
+        assert!(groups.get("@types").is_none());
     }
 
     #[test]
@@ -956,10 +933,7 @@ mod tests {
 
         assert_eq!(
             groups.get("@acme"),
-            Some(&vec![
-                "@acme/core".to_string(),
-                "@types/acme__core".to_string()
-            ])
+            Some(&["@acme/core".to_string(), "@types/acme__core".to_string()][..])
         );
     }
 
@@ -978,7 +952,7 @@ mod tests {
 
         let groups = group_npm_dependencies(&dependencies);
 
-        assert!(groups.values().all(|members| members.len() >= 2));
+        assert!(groups.iter().all(|(_, members)| members.len() >= 2));
         assert!(groups.is_empty());
     }
 

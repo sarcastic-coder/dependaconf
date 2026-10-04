@@ -1,10 +1,12 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     error::Error as StdError,
     fs::File,
     io::{self, Write},
     path::Path,
 };
+
+use crate::ecosystems::DependencyGroups;
 
 #[derive(Debug)]
 pub(super) enum Error {
@@ -132,19 +134,19 @@ fn common_peer_root(group: &str) -> String {
 fn write_config<W: Write>(
     writer: W,
     package_ecosystem: &str,
-    groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
+    groups_by_workspace: &DependencyGroups,
 ) -> Result<(), Error> {
     let updates = groups_by_workspace
         .iter()
         .map(|(workspace, groups)| {
             let mut dependabot_groups = BTreeMap::new();
-            for (group, patterns) in groups {
+            for (group, patterns) in groups.iter() {
                 let identifier = dependabot_group_identifier(group);
                 if dependabot_groups
                     .insert(
                         identifier,
                         DependabotGroup {
-                            patterns: patterns.clone(),
+                            patterns: patterns.to_vec(),
                         },
                     )
                     .is_some()
@@ -189,7 +191,7 @@ fn write_config<W: Write>(
 pub(super) fn write_config_file(
     path: &Path,
     package_ecosystem: &str,
-    groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
+    groups_by_workspace: &DependencyGroups,
 ) -> Result<(), Error> {
     if let Some(parent) = path
         .parent()
@@ -289,10 +291,10 @@ mod tests {
         patterns: Vec<String>,
     }
 
-    fn sample_groups() -> BTreeMap<String, HashMap<String, Vec<String>>> {
-        BTreeMap::from([(
+    fn sample_groups() -> DependencyGroups {
+        [(
             String::new(),
-            HashMap::from([
+            [
                 (
                     "@acme".to_string(),
                     vec!["@acme/core".to_string(), "@acme/ui".to_string()],
@@ -301,8 +303,12 @@ mod tests {
                     "react+react-dom".to_string(),
                     vec!["react".to_string(), "react-dom".to_string()],
                 ),
-            ]),
-        )])
+            ]
+            .into_iter()
+            .collect(),
+        )]
+        .into_iter()
+        .collect()
     }
 
     #[test]
@@ -340,22 +346,28 @@ mod tests {
 
     #[test]
     fn serializes_each_workspace_as_a_separate_update_directory() {
-        let groups_by_workspace = BTreeMap::from([
+        let groups_by_workspace: DependencyGroups = [
             (
                 "packages/client".to_string(),
-                HashMap::from([(
+                [(
                     "graphql".to_string(),
                     vec!["@apollo/client".to_string(), "graphql".to_string()],
-                )]),
+                )]
+                .into_iter()
+                .collect(),
             ),
             (
                 "packages/server".to_string(),
-                HashMap::from([(
+                [(
                     "graphql".to_string(),
                     vec!["@apollo/server".to_string(), "graphql".to_string()],
-                )]),
+                )]
+                .into_iter()
+                .collect(),
             ),
-        ]);
+        ]
+        .into_iter()
+        .collect();
         let mut output = Vec::new();
 
         write_config(&mut output, "npm", &groups_by_workspace).unwrap();
@@ -478,9 +490,9 @@ updates:
 
     #[test]
     fn serializes_precombined_workspace_groups_as_one_root_update() {
-        let groups_by_workspace = BTreeMap::from([(
+        let groups_by_workspace: DependencyGroups = [(
             String::new(),
-            HashMap::from([
+            [
                 (
                     "graphql".to_string(),
                     vec!["@apollo/client".to_string(), "@apollo/server".to_string()],
@@ -490,8 +502,12 @@ updates:
                     vec!["graphql".to_string()],
                 ),
                 ("react".to_string(), vec!["react".to_string()]),
-            ]),
-        )]);
+            ]
+            .into_iter()
+            .collect(),
+        )]
+        .into_iter()
+        .collect();
         let mut output = Vec::new();
 
         write_config(&mut output, "npm", &groups_by_workspace).unwrap();
