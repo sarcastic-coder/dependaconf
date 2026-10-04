@@ -1,9 +1,38 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    error::Error as StdError,
+    fmt,
     path::Path,
 };
 
 mod npm;
+
+#[derive(Debug)]
+pub(super) enum Error {
+    Npm(npm::Error),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Npm(error) => write!(f, "npm dependency analysis failed: {error}"),
+        }
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Npm(error) => Some(error),
+        }
+    }
+}
+
+impl From<npm::Error> for Error {
+    fn from(error: npm::Error) -> Self {
+        Self::Npm(error)
+    }
+}
 
 pub(super) type DependencyGroups = BTreeMap<String, HashMap<String, Vec<String>>>;
 
@@ -16,7 +45,7 @@ pub(super) struct ProjectDependencies {
 pub(super) fn detect(
     root: &Path,
     include_debug_report: bool,
-) -> Result<Option<ProjectDependencies>, Box<dyn std::error::Error>> {
+) -> Result<Option<ProjectDependencies>, Error> {
     if !npm::is_project(root) {
         return Ok(None);
     }

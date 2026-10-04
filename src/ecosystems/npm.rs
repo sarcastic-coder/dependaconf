@@ -1,13 +1,66 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    error::Error as StdError,
     fmt::Write as _,
     fs::read_to_string,
+    io,
     path::Path,
 };
 
 use super::DependencyGroups;
 
 pub(super) const DEPENDABOT_NAME: &str = "npm";
+
+#[derive(Debug)]
+pub(crate) enum Error {
+    Io(io::Error),
+    Json(serde_json::Error),
+    UnsupportedLockfileVersion(u32),
+    MissingRootPackageEntry,
+    MissingDirectDependency(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "failed to read npm package-lock: {error}"),
+            Self::Json(error) => write!(f, "failed to parse npm package-lock: {error}"),
+            Self::UnsupportedLockfileVersion(version) => {
+                write!(f, "unsupported npm package-lock version: {version}")
+            }
+            Self::MissingRootPackageEntry => {
+                write!(f, "npm package-lock is missing the root package entry")
+            }
+            Self::MissingDirectDependency(name) => {
+                write!(f, "npm package-lock is missing direct dependency {name}")
+            }
+        }
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Json(error) => Some(error),
+            Self::UnsupportedLockfileVersion(_)
+            | Self::MissingRootPackageEntry
+            | Self::MissingDirectDependency(_) => None,
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(error)
+    }
+}
 
 #[derive(serde::Deserialize)]
 struct NpmPackageLock {
@@ -44,7 +97,7 @@ pub(super) fn is_project(root: &Path) -> bool {
 pub(super) fn dependency_analysis(
     root: &Path,
     include_debug_report: bool,
-) -> Result<(DependencyGroups, Option<String>), Box<dyn std::error::Error>> {
+) -> Result<(DependencyGroups, Option<String>), Error> {
     let dependencies = read_npm_dependency_metadata(root)?;
     let groups = dependencies
         .iter()
@@ -304,27 +357,16 @@ fn dependency_group_reason(
 
 fn read_npm_dependency_metadata(
     root: &Path,
-) -> Result<BTreeMap<String, Vec<NpmDependency>>, Box<dyn std::error::Error>> {
+) -> Result<BTreeMap<String, Vec<NpmDependency>>, Error> {
     let contents = read_to_string(root.join("package-lock.json"))?;
     let lockfile: NpmPackageLock = serde_json::from_str(&contents)?;
 
     if !matches!(lockfile.lockfile_version, 2 | 3) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "unsupported npm package-lock version: {}",
-                lockfile.lockfile_version
-            ),
-        )
-        .into());
+        return Err(Error::UnsupportedLockfileVersion(lockfile.lockfile_version));
     }
 
     if !lockfile.packages.contains_key("") {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "npm package-lock is missing the root package entry",
-        )
-        .into());
+        return Err(Error::MissingRootPackageEntry);
     }
 
     let mut dependencies_by_workspace: BTreeMap<String, Vec<NpmDependency>> = lockfile
@@ -340,12 +382,7 @@ fn read_npm_dependency_metadata(
         })
         .map(|(workspace_path, name)| {
             let package = find_npm_dependency_package(&lockfile.packages, workspace_path, name)
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("npm package-lock is missing direct dependency {name}"),
-                    )
-                })?;
+                .ok_or_else(|| Error::MissingDirectDependency(name.clone()))?;
 
             Ok((
                 workspace_path.clone(),
@@ -355,7 +392,7 @@ fn read_npm_dependency_metadata(
                 },
             ))
         })
-        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?
+        .collect::<Result<Vec<_>, Error>>()?
         .into_iter()
         .fold(BTreeMap::new(), |mut grouped, (workspace, dependency)| {
             grouped.entry(workspace).or_default().push(dependency);

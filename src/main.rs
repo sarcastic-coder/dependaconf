@@ -1,9 +1,50 @@
-use std::{env, path::Path};
+use std::{env, error::Error as StdError, fmt, io, path::Path};
 
 use clap::Parser;
 
 mod dependabot;
 mod ecosystems;
+
+#[derive(Debug)]
+enum MainError {
+    CurrentDirectory(io::Error),
+    Ecosystems(ecosystems::Error),
+    Dependabot(dependabot::Error),
+}
+
+impl fmt::Display for MainError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CurrentDirectory(error) => {
+                write!(f, "failed to determine the current directory: {error}")
+            }
+            Self::Ecosystems(error) => error.fmt(f),
+            Self::Dependabot(error) => error.fmt(f),
+        }
+    }
+}
+
+impl StdError for MainError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::CurrentDirectory(error) => Some(error),
+            Self::Ecosystems(error) => Some(error),
+            Self::Dependabot(error) => Some(error),
+        }
+    }
+}
+
+impl From<ecosystems::Error> for MainError {
+    fn from(error: ecosystems::Error) -> Self {
+        Self::Ecosystems(error)
+    }
+}
+
+impl From<dependabot::Error> for MainError {
+    fn from(error: dependabot::Error) -> Self {
+        Self::Dependabot(error)
+    }
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -18,18 +59,18 @@ struct Cli {
     debug: bool,
 }
 
-fn main() {
+fn main() -> Result<(), MainError> {
     let cli = Cli::parse();
 
-    let current_path = env::current_dir().unwrap();
-    let Some(project) = ecosystems::detect(&current_path, cli.debug).unwrap() else {
-        return;
+    let current_path = env::current_dir().map_err(MainError::CurrentDirectory)?;
+    let Some(project) = ecosystems::detect(&current_path, cli.debug)? else {
+        return Ok(());
     };
 
     if cli.debug && cli.combine_workspaces {
         eprint!(
             "{}",
-            dependabot::combined_groups_debug_report(&project.groups_by_workspace).unwrap()
+            dependabot::combined_groups_debug_report(&project.groups_by_workspace)?
         );
     } else if let Some(debug_report) = &project.debug_report {
         eprint!("{debug_report}");
@@ -40,8 +81,9 @@ fn main() {
         project.package_ecosystem,
         &project.groups_by_workspace,
         cli.combine_workspaces,
-    )
-    .unwrap();
+    )?;
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,10 +1,62 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    error::Error as StdError,
     fmt::Write as _,
     fs::File,
-    io::Write,
+    io::{self, Write},
     path::Path,
 };
+
+#[derive(Debug)]
+pub(super) enum Error {
+    Io(io::Error),
+    Yaml(serde_yaml_ng::Error),
+    SharedDependenciesGroupConflict,
+    DuplicateGroupIdentifier,
+    InvalidConfig(&'static str),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "Dependabot config I/O failed: {error}"),
+            Self::Yaml(error) => write!(f, "Dependabot config YAML failed: {error}"),
+            Self::SharedDependenciesGroupConflict => write!(
+                f,
+                "a dependency group conflicts with the shared-dependencies group"
+            ),
+            Self::DuplicateGroupIdentifier => write!(
+                f,
+                "multiple dependency groups produced the same Dependabot identifier"
+            ),
+            Self::InvalidConfig(message) => f.write_str(message),
+        }
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Yaml(error) => Some(error),
+            Self::SharedDependenciesGroupConflict
+            | Self::DuplicateGroupIdentifier
+            | Self::InvalidConfig(_) => None,
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<serde_yaml_ng::Error> for Error {
+    fn from(error: serde_yaml_ng::Error) -> Self {
+        Self::Yaml(error)
+    }
+}
 
 #[derive(serde::Serialize)]
 struct DependabotConfig {
@@ -87,7 +139,7 @@ fn common_peer_root(group: &str) -> String {
 
 fn combine_workspace_groups(
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
-) -> Result<BTreeMap<String, Vec<String>>, Box<dyn std::error::Error>> {
+) -> Result<BTreeMap<String, Vec<String>>, Error> {
     let mut workspaces_by_pattern = HashMap::<String, std::collections::HashSet<String>>::new();
     for (workspace, groups) in groups_by_workspace {
         for patterns in groups.values() {
@@ -116,11 +168,7 @@ fn combine_workspace_groups(
     }
     if !shared_patterns.is_empty() {
         if combined_groups.contains_key("shared-dependencies") {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "a dependency group conflicts with the shared-dependencies group",
-            )
-            .into());
+            return Err(Error::SharedDependenciesGroupConflict);
         }
         combined_groups.insert(
             "shared-dependencies".to_string(),
@@ -139,7 +187,7 @@ fn combine_workspace_groups(
 
 pub(super) fn combined_groups_debug_report(
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Error> {
     let groups = combine_workspace_groups(groups_by_workspace)?;
     let mut report = String::from("Combined workspace groups:\n");
     for (group_index, (group, patterns)) in groups.iter().enumerate() {
@@ -168,7 +216,7 @@ fn write_config<W: Write>(
     package_ecosystem: &str,
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
     combine_workspaces: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Error> {
     let groups_by_workspace: BTreeMap<String, HashMap<String, Vec<String>>> = if combine_workspaces
     {
         BTreeMap::from([(
@@ -195,11 +243,7 @@ fn write_config<W: Write>(
                     )
                     .is_some()
                 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "multiple dependency groups produced the same Dependabot identifier",
-                    )
-                    .into());
+                    return Err(Error::DuplicateGroupIdentifier);
                 }
             }
 
@@ -225,7 +269,7 @@ fn write_config<W: Write>(
                 },
             })
         })
-        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        .collect::<Result<Vec<_>, Error>>()?;
 
     let config = DependabotConfig {
         version: 2,
@@ -241,7 +285,7 @@ pub(super) fn write_config_file(
     package_ecosystem: &str,
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
     combine_workspaces: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Error> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -276,12 +320,11 @@ pub(super) fn write_config_file(
 fn merge_generated_groups(
     existing: &mut serde_yaml_ng::Value,
     generated: serde_yaml_ng::Value,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Error> {
     use serde_yaml_ng::{Mapping, Value};
 
     let invalid_config = || {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
+        Error::InvalidConfig(
             "existing Dependabot config must be a mapping with an updates sequence",
         )
     };
@@ -319,12 +362,9 @@ fn merge_generated_groups(
             .entry(groups_key)
             .or_insert_with(|| Value::Mapping(Mapping::new()))
             .as_mapping_mut()
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "groups in existing Dependabot update must be a mapping",
-                )
-            })?;
+            .ok_or(Error::InvalidConfig(
+                "groups in existing Dependabot update must be a mapping",
+            ))?;
 
         for (name, group) in generated_groups {
             groups.insert(name.clone(), group.clone());
