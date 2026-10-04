@@ -63,17 +63,12 @@ fn main() -> Result<(), MainError> {
     let cli = Cli::parse();
 
     let current_path = env::current_dir().map_err(MainError::CurrentDirectory)?;
-    let project = match ecosystems::detect(&current_path, cli.debug)? {
+    let project = match ecosystems::detect(&current_path, cli.debug, cli.combine_workspaces)? {
         ecosystems::Detection::Unsupported => return Ok(()),
         ecosystems::Detection::Detected(project) => project,
     };
 
-    if cli.debug && cli.combine_workspaces {
-        eprint!(
-            "{}",
-            dependabot::combined_groups_debug_report(&project.groups_by_workspace)?
-        );
-    } else if let Some(debug_report) = &project.debug_report {
+    if let Some(debug_report) = &project.debug_report {
         eprint!("{debug_report}");
     }
 
@@ -81,7 +76,6 @@ fn main() -> Result<(), MainError> {
         Path::new(".github/dependabot.yml"),
         project.package_ecosystem,
         &project.groups_by_workspace,
-        cli.combine_workspaces,
     )?;
 
     Ok(())

@@ -97,16 +97,56 @@ pub(super) fn is_project(root: &Path) -> bool {
 pub(super) fn dependency_analysis(
     root: &Path,
     include_debug_report: bool,
-) -> Result<(DependencyGroups, Option<String>), Error> {
+    combine_workspaces: bool,
+) -> Result<(DependencyGroups, Option<String>), super::Error> {
     let dependencies = read_npm_dependency_metadata(root)?;
-    let groups = dependencies
+    let mut groups: DependencyGroups = dependencies
         .iter()
         .map(|(workspace, dependencies)| (workspace.clone(), group_npm_dependencies(dependencies)))
         .collect();
-    let debug_report =
-        include_debug_report.then(|| render_dependency_report(&dependencies, &groups));
+    if combine_workspaces {
+        let combined_groups = super::combine_workspace_groups(&groups)?;
+        groups = BTreeMap::from([(String::new(), combined_groups.into_iter().collect())]);
+    }
+    let debug_report = include_debug_report.then(|| {
+        if combine_workspaces {
+            render_combined_groups_report(&groups)
+        } else {
+            render_dependency_report(&dependencies, &groups)
+        }
+    });
 
     Ok((groups, debug_report))
+}
+
+fn render_combined_groups_report(groups_by_workspace: &DependencyGroups) -> String {
+    let groups = groups_by_workspace
+        .get("")
+        .expect("combined workspace groups must be stored at the repository root");
+    let mut groups = groups.iter().collect::<Vec<_>>();
+    groups.sort_by_key(|(group, _)| *group);
+    let mut report = String::from("Combined workspace groups:\n");
+    for (group_index, (group, patterns)) in groups.iter().enumerate() {
+        let is_last_group = group_index + 1 == groups.len();
+        let group_branch = if is_last_group {
+            "└── "
+        } else {
+            "├── "
+        };
+        let pattern_indent = if is_last_group { "    " } else { "│   " };
+        let _ = writeln!(report, "{group_branch}Group: {group}");
+        let mut patterns = (*patterns).clone();
+        patterns.sort();
+        for (pattern_index, pattern) in patterns.iter().enumerate() {
+            let pattern_branch = if pattern_index + 1 == patterns.len() {
+                "└── "
+            } else {
+                "├── "
+            };
+            let _ = writeln!(report, "{pattern_indent}{pattern_branch}{pattern}");
+        }
+    }
+    report
 }
 
 fn render_dependency_report(

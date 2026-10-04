@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
     error::Error as StdError,
-    fmt::Write as _,
     fs::File,
     io::{self, Write},
     path::Path,
@@ -11,7 +10,6 @@ use std::{
 pub(super) enum Error {
     Io(io::Error),
     Yaml(serde_yaml_ng::Error),
-    SharedDependenciesGroupConflict,
     DuplicateGroupIdentifier,
     InvalidConfig(&'static str),
 }
@@ -21,10 +19,6 @@ impl std::fmt::Display for Error {
         match self {
             Self::Io(error) => write!(f, "Dependabot config I/O failed: {error}"),
             Self::Yaml(error) => write!(f, "Dependabot config YAML failed: {error}"),
-            Self::SharedDependenciesGroupConflict => write!(
-                f,
-                "a dependency group conflicts with the shared-dependencies group"
-            ),
             Self::DuplicateGroupIdentifier => write!(
                 f,
                 "multiple dependency groups produced the same Dependabot identifier"
@@ -39,9 +33,7 @@ impl StdError for Error {
         match self {
             Self::Io(error) => Some(error),
             Self::Yaml(error) => Some(error),
-            Self::SharedDependenciesGroupConflict
-            | Self::DuplicateGroupIdentifier
-            | Self::InvalidConfig(_) => None,
+            Self::DuplicateGroupIdentifier | Self::InvalidConfig(_) => None,
         }
     }
 }
@@ -137,97 +129,11 @@ fn common_peer_root(group: &str) -> String {
     }
 }
 
-fn combine_workspace_groups(
-    groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
-) -> Result<BTreeMap<String, Vec<String>>, Error> {
-    let mut workspaces_by_pattern = HashMap::<String, std::collections::HashSet<String>>::new();
-    for (workspace, groups) in groups_by_workspace {
-        for patterns in groups.values() {
-            for pattern in patterns {
-                workspaces_by_pattern
-                    .entry(pattern.clone())
-                    .or_default()
-                    .insert(workspace.clone());
-            }
-        }
-    }
-    let shared_patterns = workspaces_by_pattern
-        .into_iter()
-        .filter_map(|(pattern, workspaces)| (workspaces.len() > 1).then_some(pattern))
-        .collect::<std::collections::HashSet<_>>();
-    let mut combined_groups = BTreeMap::<String, Vec<String>>::new();
-    for groups in groups_by_workspace.values() {
-        for (group, patterns) in groups {
-            combined_groups.entry(group.clone()).or_default().extend(
-                patterns
-                    .iter()
-                    .filter(|pattern| !shared_patterns.contains(*pattern))
-                    .cloned(),
-            );
-        }
-    }
-    if !shared_patterns.is_empty() {
-        if combined_groups.contains_key("shared-dependencies") {
-            return Err(Error::SharedDependenciesGroupConflict);
-        }
-        combined_groups.insert(
-            "shared-dependencies".to_string(),
-            shared_patterns.into_iter().collect(),
-        );
-    }
-    let mut seen_patterns = std::collections::HashSet::new();
-    combined_groups.retain(|_, patterns| {
-        patterns.sort();
-        patterns.dedup();
-        patterns.retain(|pattern| seen_patterns.insert(pattern.clone()));
-        !patterns.is_empty()
-    });
-    Ok(combined_groups)
-}
-
-pub(super) fn combined_groups_debug_report(
-    groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
-) -> Result<String, Error> {
-    let groups = combine_workspace_groups(groups_by_workspace)?;
-    let mut report = String::from("Combined workspace groups:\n");
-    for (group_index, (group, patterns)) in groups.iter().enumerate() {
-        let is_last_group = group_index + 1 == groups.len();
-        let group_branch = if is_last_group {
-            "└── "
-        } else {
-            "├── "
-        };
-        let pattern_indent = if is_last_group { "    " } else { "│   " };
-        let _ = writeln!(report, "{group_branch}Group: {group}");
-        for (pattern_index, pattern) in patterns.iter().enumerate() {
-            let pattern_branch = if pattern_index + 1 == patterns.len() {
-                "└── "
-            } else {
-                "├── "
-            };
-            let _ = writeln!(report, "{pattern_indent}{pattern_branch}{pattern}");
-        }
-    }
-    Ok(report)
-}
-
 fn write_config<W: Write>(
     writer: W,
     package_ecosystem: &str,
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
-    combine_workspaces: bool,
 ) -> Result<(), Error> {
-    let groups_by_workspace: BTreeMap<String, HashMap<String, Vec<String>>> = if combine_workspaces
-    {
-        BTreeMap::from([(
-            String::new(),
-            combine_workspace_groups(groups_by_workspace)?
-                .into_iter()
-                .collect(),
-        )])
-    } else {
-        groups_by_workspace.clone()
-    };
     let updates = groups_by_workspace
         .iter()
         .map(|(workspace, groups)| {
@@ -284,7 +190,6 @@ pub(super) fn write_config_file(
     path: &Path,
     package_ecosystem: &str,
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
-    combine_workspaces: bool,
 ) -> Result<(), Error> {
     if let Some(parent) = path
         .parent()
@@ -293,12 +198,7 @@ pub(super) fn write_config_file(
         std::fs::create_dir_all(parent)?;
     }
     let mut generated = Vec::new();
-    write_config(
-        &mut generated,
-        package_ecosystem,
-        groups_by_workspace,
-        combine_workspaces,
-    )?;
+    write_config(&mut generated, package_ecosystem, groups_by_workspace)?;
     let generated: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&generated)?;
 
     let contents = if path.exists() {
@@ -420,7 +320,7 @@ mod tests {
     fn serializes_dependency_groups_to_dependabot_yaml() {
         let mut output = Vec::new();
 
-        write_config(&mut output, "npm", &sample_groups(), false).unwrap();
+        write_config(&mut output, "npm", &sample_groups()).unwrap();
 
         let contents = String::from_utf8(output).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -458,7 +358,7 @@ mod tests {
         ]);
         let mut output = Vec::new();
 
-        write_config(&mut output, "npm", &groups_by_workspace, false).unwrap();
+        write_config(&mut output, "npm", &groups_by_workspace).unwrap();
 
         let contents = String::from_utf8(output).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -487,7 +387,7 @@ mod tests {
     fn serializes_the_requested_package_ecosystem() {
         let mut output = Vec::new();
 
-        write_config(&mut output, "cargo", &sample_groups(), false).unwrap();
+        write_config(&mut output, "cargo", &sample_groups()).unwrap();
 
         let contents = String::from_utf8(output).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -500,7 +400,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let config_path = temp_dir.path().join(".github/dependabot.yml");
 
-        write_config_file(&config_path, "npm", &sample_groups(), false).unwrap();
+        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
 
         assert!(config_path.is_file());
 
@@ -539,7 +439,7 @@ updates:
         )
         .unwrap();
 
-        write_config_file(&config_path, "npm", &sample_groups(), false).unwrap();
+        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
 
         let contents = std::fs::read_to_string(config_path).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -572,34 +472,29 @@ updates:
         let original = "not: [valid";
         std::fs::write(&config_path, original).unwrap();
 
-        assert!(write_config_file(&config_path, "npm", &sample_groups(), false).is_err());
+        assert!(write_config_file(&config_path, "npm", &sample_groups()).is_err());
         assert_eq!(std::fs::read_to_string(config_path).unwrap(), original);
     }
 
     #[test]
-    fn combines_workspaces_into_one_update_with_merged_groups() {
-        let groups_by_workspace = BTreeMap::from([
-            (
-                "packages/client".to_string(),
-                HashMap::from([
-                    (
-                        "graphql".to_string(),
-                        vec!["@apollo/client".to_string(), "graphql".to_string()],
-                    ),
-                    ("react".to_string(), vec!["react".to_string()]),
-                ]),
-            ),
-            (
-                "packages/server".to_string(),
-                HashMap::from([(
+    fn serializes_precombined_workspace_groups_as_one_root_update() {
+        let groups_by_workspace = BTreeMap::from([(
+            String::new(),
+            HashMap::from([
+                (
                     "graphql".to_string(),
-                    vec!["@apollo/server".to_string(), "graphql".to_string()],
-                )]),
-            ),
-        ]);
+                    vec!["@apollo/client".to_string(), "@apollo/server".to_string()],
+                ),
+                (
+                    "shared-dependencies".to_string(),
+                    vec!["graphql".to_string()],
+                ),
+                ("react".to_string(), vec!["react".to_string()]),
+            ]),
+        )]);
         let mut output = Vec::new();
 
-        write_config(&mut output, "npm", &groups_by_workspace, true).unwrap();
+        write_config(&mut output, "npm", &groups_by_workspace).unwrap();
 
         let contents = String::from_utf8(output).unwrap();
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
@@ -630,18 +525,17 @@ updates:
     fn combines_apollo_monorepo_without_duplicate_dependency_patterns() {
         let example_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/apollo-monorepo");
         let crate::ecosystems::Detection::Detected(project) =
-            crate::ecosystems::detect(&example_root, false).unwrap()
+            crate::ecosystems::detect(&example_root, true, true).unwrap()
         else {
             panic!("expected project to be detected");
         };
-        let debug_report = combined_groups_debug_report(&project.groups_by_workspace).unwrap();
+        let debug_report = project.debug_report.as_deref().unwrap();
         let mut output = Vec::new();
 
         write_config(
             &mut output,
             project.package_ecosystem,
             &project.groups_by_workspace,
-            true,
         )
         .unwrap();
 
