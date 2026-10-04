@@ -629,9 +629,11 @@ updates:
     #[test]
     fn combines_apollo_monorepo_without_duplicate_dependency_patterns() {
         let example_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/apollo-monorepo");
-        let project = crate::ecosystems::detect(&example_root, false)
-            .unwrap()
-            .unwrap();
+        let crate::ecosystems::Detection::Detected(project) =
+            crate::ecosystems::detect(&example_root, false).unwrap()
+        else {
+            panic!("expected project to be detected");
+        };
         let debug_report = combined_groups_debug_report(&project.groups_by_workspace).unwrap();
         let mut output = Vec::new();
 

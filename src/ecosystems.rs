@@ -42,17 +42,19 @@ pub(super) struct ProjectDependencies {
     pub(super) debug_report: Option<String>,
 }
 
-pub(super) fn detect(
-    root: &Path,
-    include_debug_report: bool,
-) -> Result<Option<ProjectDependencies>, Error> {
+pub(super) enum Detection {
+    Unsupported,
+    Detected(ProjectDependencies),
+}
+
+pub(super) fn detect(root: &Path, include_debug_report: bool) -> Result<Detection, Error> {
     if !npm::is_project(root) {
-        return Ok(None);
+        return Ok(Detection::Unsupported);
     }
 
     let (groups_by_workspace, debug_report) = npm::dependency_analysis(root, include_debug_report)?;
 
-    Ok(Some(ProjectDependencies {
+    Ok(Detection::Detected(ProjectDependencies {
         package_ecosystem: npm::DEPENDABOT_NAME,
         groups_by_workspace,
         debug_report,
@@ -67,16 +69,21 @@ mod tests {
     fn detects_project_and_returns_ecosystem_neutral_groups() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm-peer");
 
-        let project = detect(&root, false).unwrap().unwrap();
+        let Detection::Detected(project) = detect(&root, false).unwrap() else {
+            panic!("expected project to be detected");
+        };
 
         assert_eq!(project.package_ecosystem, "npm");
         assert!(project.groups_by_workspace.contains_key(""));
     }
 
     #[test]
-    fn returns_none_when_no_supported_ecosystem_is_detected() {
+    fn returns_unsupported_when_no_supported_ecosystem_is_detected() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empty");
 
-        assert!(detect(&root, false).unwrap().is_none());
+        assert!(matches!(
+            detect(&root, false).unwrap(),
+            Detection::Unsupported
+        ));
     }
 }

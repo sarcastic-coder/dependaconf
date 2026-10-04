@@ -63,8 +63,9 @@ fn main() -> Result<(), MainError> {
     let cli = Cli::parse();
 
     let current_path = env::current_dir().map_err(MainError::CurrentDirectory)?;
-    let Some(project) = ecosystems::detect(&current_path, cli.debug)? else {
-        return Ok(());
+    let project = match ecosystems::detect(&current_path, cli.debug)? {
+        ecosystems::Detection::Unsupported => return Ok(()),
+        ecosystems::Detection::Detected(project) => project,
     };
 
     if cli.debug && cli.combine_workspaces {
