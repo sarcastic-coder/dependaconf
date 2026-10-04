@@ -26,7 +26,12 @@ fn main() {
         return;
     };
 
-    if let Some(debug_report) = project.debug_report {
+    if cli.debug && cli.combine_workspaces {
+        eprint!(
+            "{}",
+            dependabot::combined_groups_debug_report(&project.groups_by_workspace).unwrap()
+        );
+    } else if let Some(debug_report) = &project.debug_report {
         eprint!("{debug_report}");
     }
 

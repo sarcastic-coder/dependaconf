@@ -16,10 +16,19 @@ the API's greeting at the development URL it prints. Build both workspaces with
 The checked-in [`.github/dependabot.yml`](.github/dependabot.yml) is generated
 from the root `package-lock.json` and includes separate update entries for the
 root and both workspaces. Each entry groups only dependencies declared by its
-own package. From the repository root, regenerate it with:
+own package. Both workspaces declare `graphql`, making this a useful example
+for testing combined updates. Run with `--combine-workspaces` to generate one
+root update entry. Dependencies declared by multiple workspaces, such as
+`graphql`, are collected in a separate `shared-dependencies` group:
 
 ```sh
 cd examples/apollo-monorepo
+cargo run --manifest-path ../../Cargo.toml -- --combine-workspaces
+```
+
+Regenerate the separate workspace entries instead with:
+
+```sh
 cargo run --manifest-path ../../Cargo.toml
 ```
 

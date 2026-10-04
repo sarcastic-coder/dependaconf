@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt::Write as _,
     fs::File,
     io::Write,
     path::Path,
@@ -84,27 +85,98 @@ fn common_peer_root(group: &str) -> String {
     }
 }
 
+fn combine_workspace_groups(
+    groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
+) -> Result<BTreeMap<String, Vec<String>>, Box<dyn std::error::Error>> {
+    let mut workspaces_by_pattern = HashMap::<String, std::collections::HashSet<String>>::new();
+    for (workspace, groups) in groups_by_workspace {
+        for patterns in groups.values() {
+            for pattern in patterns {
+                workspaces_by_pattern
+                    .entry(pattern.clone())
+                    .or_default()
+                    .insert(workspace.clone());
+            }
+        }
+    }
+    let shared_patterns = workspaces_by_pattern
+        .into_iter()
+        .filter_map(|(pattern, workspaces)| (workspaces.len() > 1).then_some(pattern))
+        .collect::<std::collections::HashSet<_>>();
+    let mut combined_groups = BTreeMap::<String, Vec<String>>::new();
+    for groups in groups_by_workspace.values() {
+        for (group, patterns) in groups {
+            combined_groups.entry(group.clone()).or_default().extend(
+                patterns
+                    .iter()
+                    .filter(|pattern| !shared_patterns.contains(*pattern))
+                    .cloned(),
+            );
+        }
+    }
+    if !shared_patterns.is_empty() {
+        if combined_groups.contains_key("shared-dependencies") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "a dependency group conflicts with the shared-dependencies group",
+            )
+            .into());
+        }
+        combined_groups.insert(
+            "shared-dependencies".to_string(),
+            shared_patterns.into_iter().collect(),
+        );
+    }
+    let mut seen_patterns = std::collections::HashSet::new();
+    combined_groups.retain(|_, patterns| {
+        patterns.sort();
+        patterns.dedup();
+        patterns.retain(|pattern| seen_patterns.insert(pattern.clone()));
+        !patterns.is_empty()
+    });
+    Ok(combined_groups)
+}
+
+pub(super) fn combined_groups_debug_report(
+    groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let groups = combine_workspace_groups(groups_by_workspace)?;
+    let mut report = String::from("Combined workspace groups:\n");
+    for (group_index, (group, patterns)) in groups.iter().enumerate() {
+        let is_last_group = group_index + 1 == groups.len();
+        let group_branch = if is_last_group {
+            "└── "
+        } else {
+            "├── "
+        };
+        let pattern_indent = if is_last_group { "    " } else { "│   " };
+        let _ = writeln!(report, "{group_branch}Group: {group}");
+        for (pattern_index, pattern) in patterns.iter().enumerate() {
+            let pattern_branch = if pattern_index + 1 == patterns.len() {
+                "└── "
+            } else {
+                "├── "
+            };
+            let _ = writeln!(report, "{pattern_indent}{pattern_branch}{pattern}");
+        }
+    }
+    Ok(report)
+}
+
 fn write_config<W: Write>(
     writer: W,
     package_ecosystem: &str,
     groups_by_workspace: &BTreeMap<String, HashMap<String, Vec<String>>>,
     combine_workspaces: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let groups_by_workspace = if combine_workspaces {
-        let mut combined_groups = BTreeMap::<String, Vec<String>>::new();
-        for groups in groups_by_workspace.values() {
-            for (group, patterns) in groups {
-                combined_groups
-                    .entry(group.clone())
-                    .or_default()
-                    .extend(patterns.iter().cloned());
-            }
-        }
-        for patterns in combined_groups.values_mut() {
-            patterns.sort();
-            patterns.dedup();
-        }
-        BTreeMap::from([(String::new(), combined_groups.into_iter().collect())])
+    let groups_by_workspace: BTreeMap<String, HashMap<String, Vec<String>>> = if combine_workspaces
+    {
+        BTreeMap::from([(
+            String::new(),
+            combine_workspace_groups(groups_by_workspace)?
+                .into_iter()
+                .collect(),
+        )])
     } else {
         groups_by_workspace.clone()
     };
@@ -500,12 +572,70 @@ updates:
             serde_yaml_ng::Value::Sequence(vec![
                 serde_yaml_ng::Value::String("@apollo/client".to_string()),
                 serde_yaml_ng::Value::String("@apollo/server".to_string()),
-                serde_yaml_ng::Value::String("graphql".to_string()),
             ])
+        );
+        assert_eq!(
+            updates[0]["groups"]["shared-dependencies"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::String(
+                "graphql".to_string()
+            )])
         );
         assert_eq!(
             updates[0]["groups"]["react"]["patterns"],
             serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::String("react".to_string())])
         );
+    }
+
+    #[test]
+    fn combines_apollo_monorepo_without_duplicate_dependency_patterns() {
+        let example_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/apollo-monorepo");
+        let project = crate::ecosystems::detect(&example_root, false)
+            .unwrap()
+            .unwrap();
+        let debug_report = combined_groups_debug_report(&project.groups_by_workspace).unwrap();
+        let mut output = Vec::new();
+
+        write_config(
+            &mut output,
+            project.package_ecosystem,
+            &project.groups_by_workspace,
+            true,
+        )
+        .unwrap();
+
+        let contents = String::from_utf8(output).unwrap();
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+        let updates = config["updates"].as_sequence().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["directory"], "/");
+
+        let patterns = updates[0]["groups"]
+            .as_mapping()
+            .unwrap()
+            .values()
+            .flat_map(|group| group["patterns"].as_sequence().unwrap())
+            .collect::<Vec<_>>();
+        let unique_patterns = patterns.iter().collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(
+            updates[0]["groups"]["shared-dependencies"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::String(
+                "graphql".to_string()
+            )])
+        );
+        assert!(debug_report.contains("Group: shared-dependencies"));
+        assert!(debug_report.contains("└── graphql"));
+        for (name, group) in updates[0]["groups"].as_mapping().unwrap() {
+            if name != "shared-dependencies" {
+                assert!(
+                    group["patterns"]
+                        .as_sequence()
+                        .unwrap()
+                        .iter()
+                        .all(|pattern| pattern != "graphql")
+                );
+            }
+        }
+        assert_eq!(unique_patterns.len(), patterns.len());
     }
 }
