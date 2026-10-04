@@ -19,6 +19,16 @@ struct DependabotUpdate {
     schedule: DependabotSchedule,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     groups: BTreeMap<String, DependabotGroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cooldown: Option<DependabotCooldown>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct DependabotCooldown {
+    semver_major_days: u8,
+    semver_minor_days: u8,
+    semver_patch_days: u8,
 }
 
 #[derive(serde::Serialize)]
@@ -128,6 +138,11 @@ fn write_config<W: Write>(
                 } else {
                     format!("/{workspace}")
                 },
+                cooldown: Some(DependabotCooldown {
+                    semver_major_days: 30,
+                    semver_minor_days: 7,
+                    semver_patch_days: 3,
+                }),
                 schedule: DependabotSchedule {
                     interval: "weekly".to_string(),
                 },
@@ -372,6 +387,14 @@ mod tests {
         write_config_file(&config_path, "npm", &sample_groups(), false).unwrap();
 
         assert!(config_path.is_file());
+
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+        let cooldown = &config["updates"][0]["cooldown"];
+
+        assert_eq!(cooldown["semver-major-days"], 30);
+        assert_eq!(cooldown["semver-minor-days"], 7);
+        assert_eq!(cooldown["semver-patch-days"], 3);
     }
 
     #[test]
