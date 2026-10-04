@@ -63,9 +63,6 @@ fn render_dependency_report(
     let mut report = String::new();
 
     for (workspace, dependencies) in dependencies_by_workspace {
-        let directory = if workspace.is_empty() { "/" } else { workspace };
-        let _ = writeln!(report, "Workspace: {directory}");
-
         let groups = groups_by_workspace
             .get(workspace)
             .into_iter()
@@ -75,107 +72,140 @@ fn render_dependency_report(
                 members.sort();
                 (group.as_str(), members)
             })
-            .collect::<BTreeMap<_, _>>();
-        let assigned = groups
-            .values()
-            .flatten()
-            .map(String::as_str)
-            .collect::<std::collections::HashSet<_>>();
-        let mut ungrouped = dependencies
-            .iter()
-            .filter(|dependency| !assigned.contains(dependency.name.as_str()))
-            .map(|dependency| dependency.name.clone())
-            .collect::<Vec<_>>();
-        ungrouped.sort();
-
-        let mut sections = groups
+            .collect::<BTreeMap<_, _>>()
             .into_iter()
-            .map(|(group, members)| (format!("Group: {group}"), Some((group, members))))
             .collect::<Vec<_>>();
-        if !ungrouped.is_empty() {
-            sections.push(("Ungrouped".to_string(), None));
-        }
 
-        for (section_index, (label, group)) in sections.iter().enumerate() {
-            let is_last_section = section_index + 1 == sections.len();
-            let section_branch = if is_last_section {
-                "└── "
-            } else {
-                "├── "
-            };
-            let child_prefix = if is_last_section { "    " } else { "│   " };
-            let _ = writeln!(report, "{section_branch}{label}");
-
-            if let Some((group_name, members)) = group {
-                let member_names = members
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<std::collections::HashSet<_>>();
-                let peer_targets = dependencies
-                    .iter()
-                    .filter(|dependency| member_names.contains(dependency.name.as_str()))
-                    .flat_map(|dependency| dependency.peer_dependencies.iter())
-                    .filter(|peer| member_names.contains(peer.as_str()))
-                    .map(String::as_str)
-                    .collect::<std::collections::HashSet<_>>();
-                let mut roots = members
-                    .iter()
-                    .filter(|member| !peer_targets.contains(member.as_str()))
-                    .collect::<Vec<_>>();
-                roots.sort();
-                if roots.is_empty() {
-                    roots = members.iter().collect();
-                    roots.sort();
-                }
-
-                let mut visited = std::collections::HashSet::new();
-                for (member_index, member) in roots.iter().enumerate() {
-                    append_dependency_tree(
-                        &mut report,
-                        member,
-                        dependencies,
-                        members,
-                        group_name,
-                        &child_prefix,
-                        member_index + 1 == roots.len(),
-                        false,
-                        &mut visited,
-                    );
-                }
-
-                let mut remaining = members
-                    .iter()
-                    .filter(|member| !visited.contains(member.as_str()))
-                    .collect::<Vec<_>>();
-                remaining.sort();
-                for member in remaining {
-                    let is_last_member = visited.len() + 1 == members.len();
-                    append_dependency_tree(
-                        &mut report,
-                        member,
-                        dependencies,
-                        members,
-                        group_name,
-                        &child_prefix,
-                        is_last_member,
-                        false,
-                        &mut visited,
-                    );
-                }
-            } else {
-                for (member_index, member) in ungrouped.iter().enumerate() {
-                    let member_branch = if member_index + 1 == ungrouped.len() {
-                        "└── "
-                    } else {
-                        "├── "
-                    };
-                    let _ = writeln!(report, "{child_prefix}{member_branch}{member}");
-                }
-            }
-        }
+        render_workspace_report(&mut report, workspace, dependencies, &groups);
     }
 
     report
+}
+
+fn render_workspace_report(
+    report: &mut String,
+    workspace: &str,
+    dependencies: &[NpmDependency],
+    groups: &[(&str, Vec<String>)],
+) {
+    let directory = if workspace.is_empty() { "/" } else { workspace };
+    let _ = writeln!(report, "Workspace: {directory}");
+    let ungrouped = ungrouped_dependencies(dependencies, groups);
+
+    for (group_index, (group_name, members)) in groups.iter().enumerate() {
+        let is_last_section = group_index + 1 == groups.len() && ungrouped.is_empty();
+        let child_prefix =
+            append_section_heading(report, &format!("Group: {group_name}"), is_last_section);
+        append_group_tree(report, dependencies, group_name, members, &child_prefix);
+    }
+
+    if !ungrouped.is_empty() {
+        let child_prefix = append_section_heading(report, "Ungrouped", true);
+        append_ungrouped_dependencies(report, &ungrouped, &child_prefix);
+    }
+}
+
+fn ungrouped_dependencies(
+    dependencies: &[NpmDependency],
+    groups: &[(&str, Vec<String>)],
+) -> Vec<String> {
+    let assigned = groups
+        .iter()
+        .flat_map(|(_, members)| members)
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let mut ungrouped = dependencies
+        .iter()
+        .filter(|dependency| !assigned.contains(dependency.name.as_str()))
+        .map(|dependency| dependency.name.clone())
+        .collect::<Vec<_>>();
+    ungrouped.sort();
+    ungrouped
+}
+
+fn append_section_heading(report: &mut String, label: &str, is_last: bool) -> String {
+    let (branch, child_prefix) = if is_last {
+        ("└── ", "    ")
+    } else {
+        ("├── ", "│   ")
+    };
+    let _ = writeln!(report, "{branch}{label}");
+    child_prefix.to_string()
+}
+
+fn append_group_tree(
+    report: &mut String,
+    dependencies: &[NpmDependency],
+    group: &str,
+    members: &[String],
+    child_prefix: &str,
+) {
+    let member_names = members
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let peer_targets = dependencies
+        .iter()
+        .filter(|dependency| member_names.contains(dependency.name.as_str()))
+        .flat_map(|dependency| dependency.peer_dependencies.iter())
+        .filter(|peer| member_names.contains(peer.as_str()))
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let mut roots = members
+        .iter()
+        .filter(|member| !peer_targets.contains(member.as_str()))
+        .collect::<Vec<_>>();
+    roots.sort();
+    if roots.is_empty() {
+        roots = members.iter().collect();
+        roots.sort();
+    }
+
+    let mut visited = std::collections::HashSet::new();
+    for (member_index, member) in roots.iter().enumerate() {
+        append_dependency_tree(
+            report,
+            member,
+            dependencies,
+            members,
+            group,
+            child_prefix,
+            member_index + 1 == roots.len(),
+            false,
+            &mut visited,
+        );
+    }
+
+    let mut remaining = members
+        .iter()
+        .filter(|member| !visited.contains(member.as_str()))
+        .collect::<Vec<_>>();
+    remaining.sort();
+    for member in remaining {
+        let is_last_member = visited.len() + 1 == members.len();
+        append_dependency_tree(
+            report,
+            member,
+            dependencies,
+            members,
+            group,
+            child_prefix,
+            is_last_member,
+            false,
+            &mut visited,
+        );
+    }
+}
+
+fn append_ungrouped_dependencies(report: &mut String, dependencies: &[String], indent: &str) {
+    for (member_index, member) in dependencies.iter().enumerate() {
+        let branch = if member_index + 1 == dependencies.len() {
+            "└── "
+        } else {
+            "├── "
+        };
+        let _ = writeln!(report, "{indent}{branch}{member}");
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
