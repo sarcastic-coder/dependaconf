@@ -122,7 +122,6 @@ fn render_combined_groups_report(groups_by_workspace: &DependencyGroups) -> Stri
     let groups = groups_by_workspace
         .get("")
         .expect("combined workspace groups must be stored at the repository root");
-    let groups = groups.iter().collect::<Vec<_>>();
     let mut report = String::from("Combined workspace groups:\n");
     for (group_index, (group, patterns)) in groups.iter().enumerate() {
         let is_last_group = group_index + 1 == groups.len();
@@ -133,8 +132,6 @@ fn render_combined_groups_report(groups_by_workspace: &DependencyGroups) -> Stri
         };
         let pattern_indent = if is_last_group { "    " } else { "│   " };
         let _ = writeln!(report, "{group_branch}Group: {group}");
-        let mut patterns = patterns.to_vec();
-        patterns.sort();
         for (pattern_index, pattern) in patterns.iter().enumerate() {
             let pattern_branch = if pattern_index + 1 == patterns.len() {
                 "└── "
@@ -154,14 +151,12 @@ fn render_dependency_report(
     let mut report = String::new();
 
     for (workspace, dependencies) in dependencies_by_workspace {
-        let groups = groups_by_workspace
-            .get(workspace)
-            .into_iter()
-            .flat_map(|groups| groups.iter())
-            .map(|(group, members)| (group, members.to_vec()))
-            .collect::<Vec<_>>();
-
-        render_workspace_report(&mut report, workspace, dependencies, &groups);
+        render_workspace_report(
+            &mut report,
+            workspace,
+            dependencies,
+            groups_by_workspace.get(workspace),
+        );
     }
 
     report
@@ -171,14 +166,19 @@ fn render_workspace_report(
     report: &mut String,
     workspace: &str,
     dependencies: &[NpmDependency],
-    groups: &[(&str, Vec<String>)],
+    groups: Option<&super::WorkspaceGroups>,
 ) {
     let directory = if workspace.is_empty() { "/" } else { workspace };
     let _ = writeln!(report, "Workspace: {directory}");
     let ungrouped = ungrouped_dependencies(dependencies, groups);
+    let group_count = groups.map_or(0, super::WorkspaceGroups::len);
 
-    for (group_index, (group_name, members)) in groups.iter().enumerate() {
-        let is_last_section = group_index + 1 == groups.len() && ungrouped.is_empty();
+    for (group_index, (group_name, members)) in groups
+        .into_iter()
+        .flat_map(super::WorkspaceGroups::iter)
+        .enumerate()
+    {
+        let is_last_section = group_index + 1 == group_count && ungrouped.is_empty();
         let child_prefix =
             append_section_heading(report, &format!("Group: {group_name}"), is_last_section);
         append_group_tree(report, dependencies, group_name, members, &child_prefix);
@@ -192,12 +192,12 @@ fn render_workspace_report(
 
 fn ungrouped_dependencies(
     dependencies: &[NpmDependency],
-    groups: &[(&str, Vec<String>)],
+    groups: Option<&super::WorkspaceGroups>,
 ) -> Vec<String> {
     let assigned = groups
-        .iter()
-        .flat_map(|(_, members)| members)
-        .map(String::as_str)
+        .into_iter()
+        .flat_map(super::WorkspaceGroups::iter)
+        .flat_map(|(_, members)| members.iter().map(String::as_str))
         .collect::<std::collections::HashSet<_>>();
     let mut ungrouped = dependencies
         .iter()
