@@ -13,15 +13,22 @@ struct Cli {
         help = "Combine all npm workspace dependencies into one Dependabot update entry"
     )]
     combine_workspaces: bool,
+
+    #[arg(long, help = "Print dependency groups and peer links for debugging")]
+    debug: bool,
 }
 
 fn main() {
     let cli = Cli::parse();
 
     let current_path = env::current_dir().unwrap();
-    let Some(project) = ecosystems::detect(&current_path).unwrap() else {
+    let Some(project) = ecosystems::detect(&current_path, cli.debug).unwrap() else {
         return;
     };
+
+    if let Some(debug_report) = project.debug_report {
+        eprint!("{debug_report}");
+    }
 
     dependabot::write_config_file(
         Path::new(".github/dependabot.yml"),
@@ -41,5 +48,12 @@ mod tests {
         let cli = Cli::try_parse_from(["dependaconf", "--combine-workspaces"]).unwrap();
 
         assert!(cli.combine_workspaces);
+    }
+
+    #[test]
+    fn parses_debug_option() {
+        let cli = Cli::try_parse_from(["dependaconf", "--debug"]).unwrap();
+
+        assert!(cli.debug);
     }
 }

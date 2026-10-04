@@ -206,5 +206,15 @@ dependaconf --combine-workspaces
 This combines matching dependency groups from the root package and all npm
 workspaces into one update entry.
 
+To inspect how dependencies were assigned to groups, print a tree showing each
+workspace, group members, and peer-dependency links:
+
+```sh
+dependaconf --debug
+```
+
+The debug report is printed to stderr; configuration generation still proceeds
+as usual.
+
 Use `dependaconf --help` to display command-line help, or `dependaconf --version`
 to print the version.

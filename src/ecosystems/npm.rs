@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt::Write as _,
     fs::read_to_string,
     path::Path,
 };
@@ -40,15 +41,235 @@ pub(super) fn is_project(root: &Path) -> bool {
     root.join("package.json").is_file()
 }
 
-pub(super) fn dependency_groups(
+pub(super) fn dependency_analysis(
     root: &Path,
-) -> Result<DependencyGroups, Box<dyn std::error::Error>> {
-    read_npm_dependency_metadata(root).map(|dependencies| {
-        dependencies
+    include_debug_report: bool,
+) -> Result<(DependencyGroups, Option<String>), Box<dyn std::error::Error>> {
+    let dependencies = read_npm_dependency_metadata(root)?;
+    let groups = dependencies
+        .iter()
+        .map(|(workspace, dependencies)| (workspace.clone(), group_npm_dependencies(dependencies)))
+        .collect();
+    let debug_report =
+        include_debug_report.then(|| render_dependency_report(&dependencies, &groups));
+
+    Ok((groups, debug_report))
+}
+
+fn render_dependency_report(
+    dependencies_by_workspace: &BTreeMap<String, Vec<NpmDependency>>,
+    groups_by_workspace: &DependencyGroups,
+) -> String {
+    let mut report = String::new();
+
+    for (workspace, dependencies) in dependencies_by_workspace {
+        let directory = if workspace.is_empty() { "/" } else { workspace };
+        let _ = writeln!(report, "Workspace: {directory}");
+
+        let groups = groups_by_workspace
+            .get(workspace)
             .into_iter()
-            .map(|(workspace, dependencies)| (workspace, group_npm_dependencies(&dependencies)))
-            .collect()
-    })
+            .flat_map(|groups| groups.iter())
+            .map(|(group, members)| {
+                let mut members = members.clone();
+                members.sort();
+                (group.as_str(), members)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let assigned = groups
+            .values()
+            .flatten()
+            .map(String::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        let mut ungrouped = dependencies
+            .iter()
+            .filter(|dependency| !assigned.contains(dependency.name.as_str()))
+            .map(|dependency| dependency.name.clone())
+            .collect::<Vec<_>>();
+        ungrouped.sort();
+
+        let mut sections = groups
+            .into_iter()
+            .map(|(group, members)| (format!("Group: {group}"), Some((group, members))))
+            .collect::<Vec<_>>();
+        if !ungrouped.is_empty() {
+            sections.push(("Ungrouped".to_string(), None));
+        }
+
+        for (section_index, (label, group)) in sections.iter().enumerate() {
+            let is_last_section = section_index + 1 == sections.len();
+            let section_branch = if is_last_section {
+                "└── "
+            } else {
+                "├── "
+            };
+            let child_prefix = if is_last_section { "    " } else { "│   " };
+            let _ = writeln!(report, "{section_branch}{label}");
+
+            if let Some((group_name, members)) = group {
+                let member_names = members
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<std::collections::HashSet<_>>();
+                let peer_targets = dependencies
+                    .iter()
+                    .filter(|dependency| member_names.contains(dependency.name.as_str()))
+                    .flat_map(|dependency| dependency.peer_dependencies.iter())
+                    .filter(|peer| member_names.contains(peer.as_str()))
+                    .map(String::as_str)
+                    .collect::<std::collections::HashSet<_>>();
+                let mut roots = members
+                    .iter()
+                    .filter(|member| !peer_targets.contains(member.as_str()))
+                    .collect::<Vec<_>>();
+                roots.sort();
+                if roots.is_empty() {
+                    roots = members.iter().collect();
+                    roots.sort();
+                }
+
+                let mut visited = std::collections::HashSet::new();
+                for (member_index, member) in roots.iter().enumerate() {
+                    append_dependency_tree(
+                        &mut report,
+                        member,
+                        dependencies,
+                        members,
+                        group_name,
+                        &child_prefix,
+                        member_index + 1 == roots.len(),
+                        false,
+                        &mut visited,
+                    );
+                }
+
+                let mut remaining = members
+                    .iter()
+                    .filter(|member| !visited.contains(member.as_str()))
+                    .collect::<Vec<_>>();
+                remaining.sort();
+                for member in remaining {
+                    let is_last_member = visited.len() + 1 == members.len();
+                    append_dependency_tree(
+                        &mut report,
+                        member,
+                        dependencies,
+                        members,
+                        group_name,
+                        &child_prefix,
+                        is_last_member,
+                        false,
+                        &mut visited,
+                    );
+                }
+            } else {
+                for (member_index, member) in ungrouped.iter().enumerate() {
+                    let member_branch = if member_index + 1 == ungrouped.len() {
+                        "└── "
+                    } else {
+                        "├── "
+                    };
+                    let _ = writeln!(report, "{child_prefix}{member_branch}{member}");
+                }
+            }
+        }
+    }
+
+    report
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_dependency_tree(
+    report: &mut String,
+    name: &str,
+    dependencies: &[NpmDependency],
+    members: &[String],
+    group: &str,
+    indent: &str,
+    is_last: bool,
+    is_peer_link: bool,
+    visited: &mut std::collections::HashSet<String>,
+) {
+    let branch = if is_last { "└── " } else { "├── " };
+    let _ = write!(report, "{indent}{branch}{name}");
+    if is_peer_link {
+        let _ = write!(report, " [peer]");
+    }
+    if !visited.insert(name.to_string()) {
+        report.push('\n');
+        return;
+    }
+    if !is_peer_link
+        && let Some(dependency) = dependencies
+            .iter()
+            .find(|dependency| dependency.name == name)
+        && let Some(reason) = dependency_group_reason(dependency, group, members)
+    {
+        let _ = write!(report, "{reason}");
+    }
+    report.push('\n');
+
+    let Some(dependency) = dependencies
+        .iter()
+        .find(|dependency| dependency.name == name)
+    else {
+        return;
+    };
+    let member_names = members
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let mut peers = dependency
+        .peer_dependencies
+        .iter()
+        .filter(|peer| member_names.contains(peer.as_str()))
+        .collect::<Vec<_>>();
+    peers.sort();
+
+    let child_indent = format!("{indent}{}", if is_last { "    " } else { "│   " });
+    for (peer_index, peer) in peers.iter().enumerate() {
+        append_dependency_tree(
+            report,
+            peer,
+            dependencies,
+            members,
+            group,
+            &child_indent,
+            peer_index + 1 == peers.len(),
+            true,
+            visited,
+        );
+    }
+}
+
+fn dependency_group_reason(
+    dependency: &NpmDependency,
+    group: &str,
+    members: &[String],
+) -> Option<String> {
+    let member_names = members
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    if dependency.name.starts_with("@types/") {
+        let type_name = dependency.name.trim_start_matches("@types/");
+        let implementation = match type_name.split_once("__") {
+            Some((scope, name)) => format!("@{scope}/{name}"),
+            None => type_name.to_string(),
+        };
+        if member_names.contains(implementation.as_str()) {
+            return Some(" [types]".to_string());
+        }
+    }
+
+    if let Some((scope, _)) = dependency.name.split_once('/')
+        && scope.starts_with('@')
+        && group == scope
+    {
+        return Some(format!(" (same npm scope {scope})"));
+    }
+
+    None
 }
 
 fn read_npm_dependency_metadata(
@@ -652,5 +873,61 @@ mod tests {
 
         assert!(groups.values().all(|members| members.len() >= 2));
         assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn renders_groups_with_peer_dependency_links() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm-peer");
+        let dependencies = read_npm_dependency_metadata(&root).unwrap();
+        let groups = dependencies
+            .iter()
+            .map(|(workspace, dependencies)| {
+                (workspace.clone(), group_npm_dependencies(dependencies))
+            })
+            .collect();
+
+        let report = render_dependency_report(&dependencies, &groups);
+
+        assert!(report.contains("Workspace: /"));
+        assert!(report.contains("Group: react"));
+        assert!(report.contains("react-dom"));
+        assert!(report.contains("        └── react [peer]"));
+        assert!(!report.contains("already shown"));
+    }
+
+    #[test]
+    fn explains_scope_and_type_definition_group_members() {
+        let dependencies = BTreeMap::from([(
+            String::new(),
+            vec![
+                NpmDependency {
+                    name: "@acme/core".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@acme/ui".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "express".to_string(),
+                    peer_dependencies: vec![],
+                },
+                NpmDependency {
+                    name: "@types/express".to_string(),
+                    peer_dependencies: vec![],
+                },
+            ],
+        )]);
+        let groups = dependencies
+            .iter()
+            .map(|(workspace, dependencies)| {
+                (workspace.clone(), group_npm_dependencies(dependencies))
+            })
+            .collect();
+
+        let report = render_dependency_report(&dependencies, &groups);
+
+        assert!(report.contains("@acme/core (same npm scope @acme)"));
+        assert!(report.contains("@types/express [types]"));
     }
 }
