@@ -468,15 +468,8 @@ fn group_npm_dependencies(dependencies: &[NpmDependency]) -> super::WorkspaceGro
 
     group_npm_dependencies_by_types(&mut groups, dependencies);
 
-    let mut workspace_groups = super::WorkspaceGroups::default();
-    for (group, members) in groups {
-        if members.len() > 1 {
-            for member in members {
-                workspace_groups.add_member(&group, &member);
-            }
-        }
-    }
-    workspace_groups.normalize();
+    let mut workspace_groups: super::WorkspaceGroups = groups.into_iter().collect();
+    workspace_groups.remove_undersized_groups();
 
     workspace_groups
 }
@@ -779,10 +772,13 @@ mod tests {
         let groups = group_npm_dependencies(&dependencies);
 
         assert_eq!(
-            groups.get("@acme/core"),
+            groups
+                .iter()
+                .find(|(group, _)| *group == "@acme/core")
+                .map(|(_, members)| members),
             Some(&["@acme/core".to_string(), "@acme/plugin".to_string()][..])
         );
-        assert!(groups.get("@acme").is_none());
+        assert!(groups.iter().all(|(group, _)| group != "@acme"));
     }
 
     #[test]
@@ -899,7 +895,10 @@ mod tests {
         let groups = group_npm_dependencies(&dependencies);
 
         assert_eq!(
-            groups.get("react"),
+            groups
+                .iter()
+                .find(|(group, _)| *group == "react")
+                .map(|(_, members)| members),
             Some(
                 &[
                     "@types/react".to_string(),
@@ -910,10 +909,13 @@ mod tests {
             )
         );
         assert_eq!(
-            groups.get("express"),
+            groups
+                .iter()
+                .find(|(group, _)| *group == "express")
+                .map(|(_, members)| members),
             Some(&["@types/express".to_string(), "express".to_string()][..])
         );
-        assert!(groups.get("@types").is_none());
+        assert!(groups.iter().all(|(group, _)| group != "@types"));
     }
 
     #[test]
@@ -932,7 +934,10 @@ mod tests {
         let groups = group_npm_dependencies(&dependencies);
 
         assert_eq!(
-            groups.get("@acme"),
+            groups
+                .iter()
+                .find(|(group, _)| *group == "@acme")
+                .map(|(_, members)| members),
             Some(&["@acme/core".to_string(), "@types/acme__core".to_string()][..])
         );
     }
@@ -953,7 +958,7 @@ mod tests {
         let groups = group_npm_dependencies(&dependencies);
 
         assert!(groups.iter().all(|(_, members)| members.len() >= 2));
-        assert!(groups.is_empty());
+        assert!(groups.iter().next().is_none());
     }
 
     #[test]

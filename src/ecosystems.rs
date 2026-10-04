@@ -44,22 +44,15 @@ impl From<npm::Error> for Error {
 pub(super) struct WorkspaceGroups(BTreeMap<String, Vec<String>>);
 
 impl WorkspaceGroups {
-    pub(super) fn add_member(&mut self, group: &str, member: &str) {
-        self.0
-            .entry(group.to_string())
-            .or_default()
-            .push(member.to_string());
-    }
-
-    pub(super) fn normalize(&mut self) {
+    fn normalize(&mut self) {
         for members in self.0.values_mut() {
             members.sort();
             members.dedup();
         }
     }
 
-    pub(super) fn get(&self, group: &str) -> Option<&[String]> {
-        self.0.get(group).map(Vec::as_slice)
+    pub(super) fn remove_undersized_groups(&mut self) {
+        self.0.retain(|_, members| members.len() > 1);
     }
 
     pub(super) fn iter(&self) -> impl Iterator<Item = (&str, &[String])> {
@@ -71,15 +64,13 @@ impl WorkspaceGroups {
     pub(super) fn len(&self) -> usize {
         self.0.len()
     }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 impl FromIterator<(String, Vec<String>)> for WorkspaceGroups {
     fn from_iter<I: IntoIterator<Item = (String, Vec<String>)>>(groups: I) -> Self {
-        Self(groups.into_iter().collect())
+        let mut workspace_groups = Self(groups.into_iter().collect());
+        workspace_groups.normalize();
+        workspace_groups
     }
 }
 
@@ -217,17 +208,37 @@ mod tests {
     }
 
     #[test]
-    fn workspace_groups_add_and_normalize_members() {
-        let mut groups = WorkspaceGroups::default();
-        groups.add_member("react", "react-dom");
-        groups.add_member("react", "react");
-        groups.add_member("react", "react");
-
-        groups.normalize();
+    fn workspace_groups_collect_members_sorted_and_unique() {
+        let groups: WorkspaceGroups = [
+            (
+                "react".to_string(),
+                vec![
+                    "react-dom".to_string(),
+                    "react".to_string(),
+                    "react".to_string(),
+                ],
+            ),
+            (
+                "react-only".to_string(),
+                vec!["react".to_string(), "react".to_string()],
+            ),
+        ]
+        .into_iter()
+        .collect();
 
         assert_eq!(
-            groups.get("react"),
+            groups
+                .iter()
+                .find(|(group, _)| *group == "react")
+                .map(|(_, members)| members),
             Some(&["react".to_string(), "react-dom".to_string()][..])
+        );
+        assert_eq!(
+            groups
+                .iter()
+                .find(|(group, _)| *group == "react-only")
+                .map(|(_, members)| members),
+            Some(&["react".to_string()][..])
         );
     }
 
@@ -242,8 +253,12 @@ mod tests {
         assert_eq!(project.groups_by_workspace.len(), 1);
         let groups = project.groups_by_workspace.get("").unwrap();
         assert_eq!(
-            groups.get("shared-dependencies").unwrap(),
-            &vec!["graphql".to_string()]
+            groups
+                .iter()
+                .find(|(group, _)| *group == "shared-dependencies")
+                .unwrap()
+                .1,
+            &["graphql".to_string()][..]
         );
         assert!(
             project
