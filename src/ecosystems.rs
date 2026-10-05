@@ -266,7 +266,7 @@ react@^18.0.0:
 
     #[test]
     fn combines_groups_during_detection() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/apollo-monorepo");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/npm/apollo-monorepo");
 
         let Detection::Detected(project) = detect(&root, true, true).unwrap() else {
             panic!("expected project to be detected");

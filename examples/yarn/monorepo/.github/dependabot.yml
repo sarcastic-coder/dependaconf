@@ -1,0 +1,55 @@
+version: 2
+updates:
+- package-ecosystem: npm
+  directory: /
+  schedule:
+    interval: weekly
+  cooldown:
+    semver-major-days: 30
+    semver-minor-days: 7
+    semver-patch-days: 3
+  groups:
+    shared-dependencies:
+      patterns:
+      - '@example/ui'
+      - '@types/react'
+      - react
+      - react-dom
+- package-ecosystem: npm
+  directory: /apps/site
+  schedule:
+    interval: weekly
+  groups:
+    react:
+      patterns:
+      - '@example/ui'
+      - '@types/react'
+      - react
+      - react-dom
+  cooldown:
+    semver-major-days: 30
+    semver-minor-days: 7
+    semver-patch-days: 3
+- package-ecosystem: npm
+  directory: /apps/storybook
+  schedule:
+    interval: weekly
+  groups:
+    react:
+      patterns:
+      - '@example/ui'
+      - '@types/react'
+      - react
+      - react-dom
+  cooldown:
+    semver-major-days: 30
+    semver-minor-days: 7
+    semver-patch-days: 3
+- package-ecosystem: npm
+  directory: /packages/ui
+  schedule:
+    interval: weekly
+  cooldown:
+    semver-major-days: 30
+    semver-minor-days: 7
+    semver-patch-days: 3

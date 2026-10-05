@@ -1,0 +1,29 @@
+__metadata:
+  version: 6
+  cacheKey: 10c0
+
+"@example/ui@workspace:packages/ui":
+  version: 0.0.0-use.local
+  resolution: "@example/ui@workspace:packages/ui"
+  languageName: node
+  linkType: soft
+
+"@types/react@npm:^18.3.0":
+  version: 18.3.0
+  resolution: "@types/react@npm:18.3.0"
+  languageName: node
+  linkType: hard
+
+"react-dom@npm:^18.3.1":
+  version: 18.3.1
+  resolution: "react-dom@npm:18.3.1"
+  peerDependencies:
+    react: ^18.3.1
+  languageName: node
+  linkType: hard
+
+"react@npm:^18.3.1":
+  version: 18.3.1
+  resolution: "react@npm:18.3.1"
+  languageName: node
+  linkType: hard

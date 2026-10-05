@@ -8,8 +8,8 @@ generated output.
 From the repository root, run:
 
 ```sh
-cd examples/vite-react
-cargo run --manifest-path ../../Cargo.toml
+cd examples/npm/react-vite
+cargo run --manifest-path ../../../Cargo.toml
 ```
 
 The command reads `package.json` and `package-lock.json` and creates or replaces

@@ -1,11 +1,11 @@
 # dependaconf
 
-Smarter Dependabot grouping for npm projects.
+Smarter Dependabot grouping for JavaScript projects using npm or Yarn.
 
 If your project has a lot of dependencies, Dependabot can become noisy fast:
 large update batches, mixed concerns, and a lot of review churn. `dependaconf`
 helps you cut through that by generating a cleaner, more intentional dependency
-strategy from your `package-lock.json`.
+strategy from your npm or Yarn lockfile.
 
 It groups:
 
@@ -200,7 +200,7 @@ matching ecosystem/directory entries. Same-named groups are replaced, while
 other groups and settings are preserved. Missing entries are added
 automatically.
 
-For npm workspaces, the root package and each workspace are processed
+For JavaScript workspaces, the root package and each workspace are processed
 separately, so dependencies from different directories are not grouped together.
 
 If you want a single repository-root Dependabot entry for a monorepo, run:
@@ -209,7 +209,7 @@ If you want a single repository-root Dependabot entry for a monorepo, run:
 dependaconf --combine-workspaces
 ```
 
-This combines matching dependency groups from the root package and all npm
+This combines matching dependency groups from the root package and all
 workspaces into one update entry.
 
 To inspect how dependencies were assigned to groups, print a tree showing each
@@ -224,3 +224,16 @@ as usual.
 
 Use `dependaconf --help` to display command-line help, or `dependaconf --version`
 to print the version.
+
+## Examples
+
+Examples are grouped by package manager:
+
+- npm: [Apollo monorepo](examples/npm/apollo-monorepo/README.md),
+  [Apollo Server](examples/npm/apollo-server/README.md),
+  [Express API](examples/npm/express-api/README.md),
+  [Next.js](examples/npm/nextjs/README.md),
+  [React + Vite](examples/npm/react-vite/README.md), and
+  [Vue + Vite](examples/npm/vue-vite/README.md).
+- Yarn: [React with Yarn Classic](examples/yarn/react/README.md) and a
+  [Yarn workspaces monorepo](examples/yarn/monorepo/README.md).

@@ -22,14 +22,14 @@ root update entry. Dependencies declared by multiple workspaces, such as
 `graphql`, are collected in a separate `shared-dependencies` group:
 
 ```sh
-cd examples/apollo-monorepo
-cargo run --manifest-path ../../Cargo.toml -- --combine-workspaces
+cd examples/npm/apollo-monorepo
+cargo run --manifest-path ../../../Cargo.toml -- --combine-workspaces
 ```
 
 Regenerate the separate workspace entries instead with:
 
 ```sh
-cargo run --manifest-path ../../Cargo.toml
+cargo run --manifest-path ../../../Cargo.toml
 ```
 
 No npm install is needed just to regenerate the Dependabot configuration.

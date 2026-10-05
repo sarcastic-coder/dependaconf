@@ -539,7 +539,8 @@ updates:
 
     #[test]
     fn combines_apollo_monorepo_without_duplicate_dependency_patterns() {
-        let example_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/apollo-monorepo");
+        let example_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/npm/apollo-monorepo");
         let crate::ecosystems::Detection::Detected(project) =
             crate::ecosystems::detect(&example_root, true, true).unwrap()
         else {
