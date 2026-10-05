@@ -5,18 +5,18 @@ use std::{
     path::Path,
 };
 
-mod npm;
+mod javascript;
 
 #[derive(Debug)]
 pub(super) enum Error {
-    Npm(npm::Error),
+    JavaScript(javascript::Error),
     SharedDependenciesGroupConflict,
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Npm(error) => write!(f, "npm dependency analysis failed: {error}"),
+            Self::JavaScript(error) => write!(f, "JavaScript dependency analysis failed: {error}"),
             Self::SharedDependenciesGroupConflict => write!(
                 f,
                 "a dependency group conflicts with the shared-dependencies group"
@@ -28,15 +28,15 @@ impl fmt::Display for Error {
 impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
-            Self::Npm(error) => Some(error),
+            Self::JavaScript(error) => Some(error),
             Self::SharedDependenciesGroupConflict => None,
         }
     }
 }
 
-impl From<npm::Error> for Error {
-    fn from(error: npm::Error) -> Self {
-        Self::Npm(error)
+impl From<javascript::Error> for Error {
+    fn from(error: javascript::Error) -> Self {
+        Self::JavaScript(error)
     }
 }
 
@@ -163,15 +163,15 @@ pub(super) fn detect(
     include_debug_report: bool,
     combine_workspaces: bool,
 ) -> Result<Detection, Error> {
-    if !npm::is_project(root) {
+    if !javascript::is_project(root) {
         return Ok(Detection::Unsupported);
     }
 
     let (groups_by_workspace, debug_report) =
-        npm::dependency_analysis(root, include_debug_report, combine_workspaces)?;
+        javascript::dependency_analysis(root, include_debug_report, combine_workspaces)?;
 
     Ok(Detection::Detected(ProjectDependencies {
-        package_ecosystem: npm::DEPENDABOT_NAME,
+        package_ecosystem: javascript::DEPENDABOT_NAME,
         groups_by_workspace,
         debug_report,
     }))
@@ -187,6 +187,32 @@ mod tests {
 
         let Detection::Detected(project) = detect(&root, false, false).unwrap() else {
             panic!("expected project to be detected");
+        };
+
+        assert_eq!(project.package_ecosystem, "npm");
+        assert!(project.groups_by_workspace.get("").is_some());
+    }
+
+    #[test]
+    fn detects_yarn_lockfile_as_dependabot_npm_ecosystem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp_dir.path().join("package.json"),
+            r#"{"dependencies":{"react":"^18.0.0"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("yarn.lock"),
+            r#"
+# yarn lockfile v1
+react@^18.0.0:
+  version "18.2.0"
+"#,
+        )
+        .unwrap();
+
+        let Detection::Detected(project) = detect(temp_dir.path(), false, false).unwrap() else {
+            panic!("expected Yarn project to be detected");
         };
 
         assert_eq!(project.package_ecosystem, "npm");

@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt::Write as _};
 
-use super::NpmDependency;
+use super::DependencyMetadata;
 use crate::ecosystems::{DependencyGroups, WorkspaceGroups};
 
 pub(super) fn render_combined_groups_report(groups_by_workspace: &DependencyGroups) -> String {
@@ -30,7 +30,7 @@ pub(super) fn render_combined_groups_report(groups_by_workspace: &DependencyGrou
 }
 
 pub(super) fn render_dependency_report(
-    dependencies_by_workspace: &BTreeMap<String, Vec<NpmDependency>>,
+    dependencies_by_workspace: &BTreeMap<String, Vec<DependencyMetadata>>,
     groups_by_workspace: &DependencyGroups,
 ) -> String {
     let mut report = String::new();
@@ -50,7 +50,7 @@ pub(super) fn render_dependency_report(
 fn render_workspace_report(
     report: &mut String,
     workspace: &str,
-    dependencies: &[NpmDependency],
+    dependencies: &[DependencyMetadata],
     groups: Option<&WorkspaceGroups>,
 ) {
     let directory = if workspace.is_empty() { "/" } else { workspace };
@@ -76,7 +76,7 @@ fn render_workspace_report(
 }
 
 fn ungrouped_dependencies(
-    dependencies: &[NpmDependency],
+    dependencies: &[DependencyMetadata],
     groups: Option<&WorkspaceGroups>,
 ) -> Vec<String> {
     let assigned = groups
@@ -105,7 +105,7 @@ fn append_section_heading(report: &mut String, label: &str, is_last: bool) -> St
 
 fn append_group_tree(
     report: &mut String,
-    dependencies: &[NpmDependency],
+    dependencies: &[DependencyMetadata],
     group: &str,
     members: &[String],
     child_prefix: &str,
@@ -166,7 +166,7 @@ fn append_ungrouped_dependencies(report: &mut String, dependencies: &[String], i
 
 struct DependencyTreeReport<'a> {
     output: &'a mut String,
-    dependencies: &'a [NpmDependency],
+    dependencies: &'a [DependencyMetadata],
     members: &'a [String],
     group: &'a str,
     visited: std::collections::HashSet<String>,
@@ -222,7 +222,7 @@ impl DependencyTreeReport<'_> {
 }
 
 fn dependency_group_reason(
-    dependency: &NpmDependency,
+    dependency: &DependencyMetadata,
     group: &str,
     members: &[String],
 ) -> Option<String> {
@@ -260,13 +260,13 @@ mod tests {
     #[test]
     fn renders_groups_with_peer_dependency_links() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm-peer");
-        let dependencies = super::super::read_npm_dependency_metadata(&root).unwrap();
+        let dependencies = super::super::npm::read_dependency_metadata(&root).unwrap();
         let groups = dependencies
             .iter()
             .map(|(workspace, dependencies)| {
                 (
                     workspace.clone(),
-                    super::super::group_npm_dependencies(dependencies),
+                    super::super::group_dependencies(dependencies),
                 )
             })
             .collect();
@@ -285,19 +285,19 @@ mod tests {
         let dependencies = BTreeMap::from([(
             String::new(),
             vec![
-                NpmDependency {
+                DependencyMetadata {
                     name: "@acme/core".to_string(),
                     peer_dependencies: vec![],
                 },
-                NpmDependency {
+                DependencyMetadata {
                     name: "@acme/ui".to_string(),
                     peer_dependencies: vec![],
                 },
-                NpmDependency {
+                DependencyMetadata {
                     name: "express".to_string(),
                     peer_dependencies: vec![],
                 },
-                NpmDependency {
+                DependencyMetadata {
                     name: "@types/express".to_string(),
                     peer_dependencies: vec![],
                 },
@@ -308,7 +308,7 @@ mod tests {
             .map(|(workspace, dependencies)| {
                 (
                     workspace.clone(),
-                    super::super::group_npm_dependencies(dependencies),
+                    super::super::group_dependencies(dependencies),
                 )
             })
             .collect();

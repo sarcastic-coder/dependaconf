@@ -1,67 +1,19 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    error::Error as StdError,
     fs::read_to_string,
-    io,
     path::Path,
 };
 
-use super::DependencyGroups;
+use super::{DependencyMetadata, Error};
 
-mod report;
-
-pub(super) const DEPENDABOT_NAME: &str = "npm";
-
-#[derive(Debug)]
-pub(crate) enum Error {
-    Io(io::Error),
-    Json(serde_json::Error),
-    UnsupportedLockfileVersion(u32),
-    MissingRootPackageEntry,
-    MissingDirectDependency(String),
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(error) => write!(f, "failed to read npm package-lock: {error}"),
-            Self::Json(error) => write!(f, "failed to parse npm package-lock: {error}"),
-            Self::UnsupportedLockfileVersion(version) => {
-                write!(f, "unsupported npm package-lock version: {version}")
-            }
-            Self::MissingRootPackageEntry => {
-                write!(f, "npm package-lock is missing the root package entry")
-            }
-            Self::MissingDirectDependency(name) => {
-                write!(f, "npm package-lock is missing direct dependency {name}")
-            }
-        }
-    }
-}
-
-impl StdError for Error {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            Self::Json(error) => Some(error),
-            Self::UnsupportedLockfileVersion(_)
-            | Self::MissingRootPackageEntry
-            | Self::MissingDirectDependency(_) => None,
-        }
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
-}
-
-impl From<serde_json::Error> for Error {
-    fn from(error: serde_json::Error) -> Self {
-        Self::Json(error)
-    }
-}
+#[cfg(test)]
+use super::{
+    group_dependencies as group_npm_dependencies,
+    group_dependencies_by_peer as group_npm_dependencies_by_peer,
+    group_dependencies_by_scope as group_npm_dependencies_by_scope, merge_overlapping_peer_groups,
+};
+#[cfg(test)]
+type NpmDependency = DependencyMetadata;
 
 #[derive(serde::Deserialize)]
 struct NpmPackageLock {
@@ -85,43 +37,9 @@ struct LockedPackage {
     peer_dependencies: HashMap<String, String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct NpmDependency {
-    name: String,
-    peer_dependencies: Vec<String>,
-}
-
-pub(super) fn is_project(root: &Path) -> bool {
-    root.join("package.json").is_file()
-}
-
-pub(super) fn dependency_analysis(
+pub(super) fn read_dependency_metadata(
     root: &Path,
-    include_debug_report: bool,
-    combine_workspaces: bool,
-) -> Result<(DependencyGroups, Option<String>), super::Error> {
-    let dependencies = read_npm_dependency_metadata(root)?;
-    let mut groups: DependencyGroups = dependencies
-        .iter()
-        .map(|(workspace, dependencies)| (workspace.clone(), group_npm_dependencies(dependencies)))
-        .collect();
-    if combine_workspaces {
-        groups = groups.combine_workspaces()?;
-    }
-    let debug_report = include_debug_report.then(|| {
-        if combine_workspaces {
-            report::render_combined_groups_report(&groups)
-        } else {
-            report::render_dependency_report(&dependencies, &groups)
-        }
-    });
-
-    Ok((groups, debug_report))
-}
-
-fn read_npm_dependency_metadata(
-    root: &Path,
-) -> Result<BTreeMap<String, Vec<NpmDependency>>, Error> {
+) -> Result<BTreeMap<String, Vec<DependencyMetadata>>, Error> {
     let contents = read_to_string(root.join("package-lock.json"))?;
     let lockfile: NpmPackageLock = serde_json::from_str(&contents)?;
 
@@ -133,7 +51,7 @@ fn read_npm_dependency_metadata(
         return Err(Error::MissingRootPackageEntry);
     }
 
-    let mut dependencies_by_workspace: BTreeMap<String, Vec<NpmDependency>> = lockfile
+    let mut dependencies_by_workspace: BTreeMap<String, Vec<DependencyMetadata>> = lockfile
         .packages
         .iter()
         .filter(|(path, _)| !path.split('/').any(|component| component == "node_modules"))
@@ -150,7 +68,7 @@ fn read_npm_dependency_metadata(
 
             Ok((
                 workspace_path.clone(),
-                NpmDependency {
+                DependencyMetadata {
                     name: package.name.clone().unwrap_or_else(|| name.clone()),
                     peer_dependencies: package.peer_dependencies.keys().cloned().collect(),
                 },
@@ -202,176 +120,15 @@ fn find_npm_dependency_package<'a>(
     }
 }
 
-fn group_npm_dependencies(dependencies: &[NpmDependency]) -> super::WorkspaceGroups {
-    let regular_dependencies: Vec<_> = dependencies
-        .iter()
-        .filter(|dependency| !dependency.name.starts_with("@types/"))
-        .cloned()
-        .collect();
-    let mut groups =
-        merge_overlapping_peer_groups(group_npm_dependencies_by_peer(&regular_dependencies));
-    let peer_members: std::collections::HashSet<_> = groups.values().flatten().cloned().collect();
-
-    for (scope, mut members) in group_npm_dependencies_by_scope(&regular_dependencies) {
-        members.retain(|member| !peer_members.contains(member));
-        if !members.is_empty() {
-            groups.entry(scope).or_default().extend(members);
-        }
-    }
-
-    group_npm_dependencies_by_types(&mut groups, dependencies);
-
-    let mut workspace_groups: super::WorkspaceGroups = groups.into_iter().collect();
-    workspace_groups.remove_undersized_groups();
-
-    workspace_groups
-}
-
-fn group_npm_dependencies_by_types(
-    groups: &mut HashMap<String, Vec<String>>,
-    dependencies: &[NpmDependency],
-) {
-    let installed: std::collections::HashSet<_> = dependencies
-        .iter()
-        .map(|dependency| dependency.name.as_str())
-        .collect();
-    let mut unmatched_types = Vec::new();
-
-    for dependency in dependencies
-        .iter()
-        .filter(|dependency| dependency.name.starts_with("@types/"))
-    {
-        let type_name = dependency.name.trim_start_matches("@types/");
-        let implementation = match type_name.split_once("__") {
-            Some((scope, name)) => format!("@{scope}/{name}"),
-            None => type_name.to_string(),
-        };
-
-        if !installed.contains(implementation.as_str()) {
-            unmatched_types.push(dependency.name.clone());
-            continue;
-        }
-
-        let target_group = groups
-            .iter()
-            .find(|(_, members)| members.iter().any(|member| member == &implementation))
-            .map(|(group, _)| group.clone())
-            .unwrap_or_else(|| implementation.clone());
-        let members = groups
-            .entry(target_group)
-            .or_insert_with(|| vec![implementation]);
-        members.push(dependency.name.clone());
-    }
-
-    if !unmatched_types.is_empty() {
-        groups
-            .entry("@types".to_string())
-            .or_default()
-            .extend(unmatched_types);
-    }
-}
-
-fn merge_overlapping_peer_groups(
-    groups: HashMap<String, Vec<String>>,
-) -> HashMap<String, Vec<String>> {
-    let mut groups: Vec<_> = groups
-        .into_iter()
-        .map(|(peer, members)| {
-            (
-                peer,
-                members
-                    .into_iter()
-                    .collect::<std::collections::HashSet<_>>(),
-            )
-        })
-        .collect();
-    groups.sort_by(|left, right| left.0.cmp(&right.0));
-
-    let mut index = 0;
-    while index < groups.len() {
-        let mut other_index = index + 1;
-        while other_index < groups.len() {
-            if groups[index].1.is_disjoint(&groups[other_index].1) {
-                other_index += 1;
-                continue;
-            }
-
-            let (other_peer, other_members) = groups.remove(other_index);
-            groups[index].0.push('+');
-            groups[index].0.push_str(&other_peer);
-            groups[index].1.extend(other_members);
-            other_index = index + 1;
-        }
-        index += 1;
-    }
-
-    groups
-        .into_iter()
-        .map(|(peer, members)| (peer, members.into_iter().collect()))
-        .collect()
-}
-
-fn group_npm_dependencies_by_scope(dependencies: &[NpmDependency]) -> HashMap<String, Vec<String>> {
-    let mut groups = HashMap::new();
-
-    for dependency in dependencies {
-        if let Some((scope, _)) = dependency.name.split_once('/')
-            && scope.starts_with('@')
-        {
-            groups
-                .entry(scope.to_string())
-                .or_insert_with(Vec::new)
-                .push(dependency.name.clone());
-        }
-    }
-
-    groups
-}
-
-fn group_npm_dependencies_by_peer(dependencies: &[NpmDependency]) -> HashMap<String, Vec<String>> {
-    let installed: std::collections::HashSet<_> = dependencies
-        .iter()
-        .map(|dependency| dependency.name.as_str())
-        .collect();
-    let mut groups = HashMap::new();
-
-    for dependency in dependencies {
-        for peer in &dependency.peer_dependencies {
-            if installed.contains(peer.as_str()) {
-                let group = groups
-                    .entry(peer.clone())
-                    .or_insert_with(|| vec![peer.clone()]);
-                if !group.contains(&dependency.name) {
-                    group.push(dependency.name.clone());
-                }
-            }
-        }
-    }
-
-    groups
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn can_detect_npm_ecosystem() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm");
-        assert!(is_project(&root));
-    }
-
-    #[test]
-    fn does_not_detect_npm_without_package_json() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empty");
-        assert!(!is_project(&root));
-    }
-
-    #[test]
     fn reads_peer_dependencies_from_npm_lockfile() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm-peer");
 
-        let dependencies = read_npm_dependency_metadata(&root).unwrap();
+        let dependencies = read_dependency_metadata(&root).unwrap();
         let plugin = dependencies
             .get("")
             .unwrap()
@@ -416,7 +173,7 @@ mod tests {
         }"#;
         std::fs::write(temp_dir.path().join("package-lock.json"), lockfile).unwrap();
 
-        let dependencies = read_npm_dependency_metadata(temp_dir.path()).unwrap();
+        let dependencies = read_dependency_metadata(temp_dir.path()).unwrap();
         assert!(dependencies.get("").unwrap().is_empty());
         assert_eq!(
             dependencies

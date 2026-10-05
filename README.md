@@ -156,7 +156,7 @@ cargo build --release
 ## Usage
 
 Once the binary is available, run `dependaconf` from the root of an npm project
-that contains both `package.json` and `package-lock.json`.
+that contains `package.json` and either `package-lock.json` or `yarn.lock`.
 
 ```sh
 cd path/to/your-npm-project
@@ -184,7 +184,13 @@ updates:
           - "eslint*"
 ```
 
-`dependaconf` expects a lockfile in npm format v2 or v3. It creates
+`dependaconf` reads npm lockfile versions 2 and 3, Yarn Classic v1 lockfiles,
+and modern Yarn lockfiles. If both `package-lock.json` and `yarn.lock` are
+present, the npm lockfile is used. Yarn dependencies are read from
+`package.json` and resolved against `yarn.lock`; Yarn workspace manifests are
+processed separately. Classic Yarn lockfiles do not record peer dependency
+metadata, so only modern Yarn lockfiles can form groups based on installed peer
+dependencies. The tool creates
 `.github/dependabot.yml` and the `.github` directory if needed, then writes a
 configuration that groups dependencies by installed peer dependencies and, for
 remaining packages, by npm scope.
