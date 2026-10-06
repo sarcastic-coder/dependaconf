@@ -73,12 +73,6 @@ impl From<std::string::FromUtf8Error> for Error {
 }
 
 #[derive(serde::Serialize)]
-struct DependabotConfig {
-    version: u8,
-    updates: Vec<DependabotUpdate>,
-}
-
-#[derive(serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct DependabotUpdate {
     package_ecosystem: String,
@@ -151,10 +145,72 @@ fn common_peer_root(group: &str) -> String {
     }
 }
 
-fn write_config<W: Write>(
-    writer: W,
+fn yaml_scalar(value: &str) -> String {
+    serde_yaml_ng::to_string(&value.to_string())
+        .unwrap_or_else(|_| format!("\"{value}\""))
+        .trim_end()
+        .to_string()
+}
+
+#[derive(Clone, Copy)]
+struct ConfigIndentation {
+    update_item: usize,
+    pattern_item_offset: usize,
+}
+
+impl Default for ConfigIndentation {
+    fn default() -> Self {
+        Self {
+            update_item: 2,
+            pattern_item_offset: 2,
+        }
+    }
+}
+
+fn detect_config_indentation(contents: &str) -> ConfigIndentation {
+    let mut indentation = ConfigIndentation::default();
+    let lines: Vec<_> = contents.lines().collect();
+    let mut found_pattern_list = false;
+
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed == "updates:" {
+            if let Some(item) = lines[index + 1..]
+                .iter()
+                .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+                .filter(|line| line.trim_start().starts_with("- "))
+            {
+                indentation.update_item = item.len() - item.trim_start().len();
+            }
+        }
+
+        if trimmed == "patterns:" {
+            let key_indent = line.len() - line.trim_start().len();
+            if let Some(item) = lines[index + 1..]
+                .iter()
+                .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+                .filter(|line| line.trim_start().starts_with("- "))
+            {
+                let item_indent = item.len() - item.trim_start().len();
+                indentation.pattern_item_offset = item_indent.saturating_sub(key_indent);
+                found_pattern_list = true;
+                break;
+            }
+        }
+    }
+
+    if !found_pattern_list && indentation.update_item == 0 {
+        indentation.pattern_item_offset = 0;
+    }
+
+    indentation
+}
+
+fn write_config_with_indentation<W: Write>(
+    mut writer: W,
     package_ecosystem: &str,
     groups_by_workspace: &DependencyGroups,
+    indentation: ConfigIndentation,
 ) -> Result<(), Error> {
     let updates = groups_by_workspace
         .iter()
@@ -199,11 +255,72 @@ fn write_config<W: Write>(
         })
         .collect::<Result<Vec<_>, Error>>()?;
 
-    let config = DependabotConfig {
-        version: 2,
-        updates,
-    };
-    serde_yaml_ng::to_writer(writer, &config)?;
+    writeln!(writer, "version: 2")?;
+    writeln!(writer, "updates:")?;
+
+    for update in updates {
+        let update_indent = indentation.update_item;
+        let field_indent = update_indent + 2;
+        writeln!(
+            writer,
+            "{}- package-ecosystem: {}",
+            " ".repeat(update_indent),
+            yaml_scalar(&update.package_ecosystem)
+        )?;
+        writeln!(
+            writer,
+            "{}directory: {}",
+            " ".repeat(field_indent),
+            yaml_scalar(&update.directory)
+        )?;
+        writeln!(writer, "{}schedule:", " ".repeat(field_indent))?;
+        writeln!(
+            writer,
+            "{}interval: {}",
+            " ".repeat(field_indent + 2),
+            yaml_scalar(&update.schedule.interval)
+        )?;
+
+        if let Some(cooldown) = update.cooldown {
+            writeln!(writer, "{}cooldown:", " ".repeat(field_indent))?;
+            writeln!(
+                writer,
+                "{}semver-major-days: {}",
+                " ".repeat(field_indent + 2),
+                cooldown.semver_major_days
+            )?;
+            writeln!(
+                writer,
+                "{}semver-minor-days: {}",
+                " ".repeat(field_indent + 2),
+                cooldown.semver_minor_days
+            )?;
+            writeln!(
+                writer,
+                "{}semver-patch-days: {}",
+                " ".repeat(field_indent + 2),
+                cooldown.semver_patch_days
+            )?;
+        }
+
+        if let Some(groups) = update.groups {
+            writeln!(writer, "{}groups:", " ".repeat(field_indent))?;
+            for (group_name, group) in groups {
+                let group_indent = field_indent + 2;
+                let patterns_indent = group_indent + 2;
+                writeln!(writer, "{}{group_name}:", " ".repeat(group_indent))?;
+                writeln!(writer, "{}patterns:", " ".repeat(patterns_indent))?;
+                for pattern in group.patterns {
+                    writeln!(
+                        writer,
+                        "{}- {}",
+                        " ".repeat(patterns_indent + indentation.pattern_item_offset),
+                        yaml_scalar(&pattern)
+                    )?;
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -219,12 +336,25 @@ pub(super) fn write_config_file(
     {
         std::fs::create_dir_all(parent)?;
     }
+    let existing_contents = if path.exists() {
+        Some(std::fs::read_to_string(path)?)
+    } else {
+        None
+    };
+    let indentation = existing_contents
+        .as_deref()
+        .map(detect_config_indentation)
+        .unwrap_or_default();
     let mut generated = Vec::new();
-    write_config(&mut generated, package_ecosystem, groups_by_workspace)?;
+    write_config_with_indentation(
+        &mut generated,
+        package_ecosystem,
+        groups_by_workspace,
+        indentation,
+    )?;
     let generated_text = String::from_utf8(generated)?;
 
-    let contents = if path.exists() {
-        let contents = std::fs::read_to_string(path)?;
+    let contents = if let Some(contents) = existing_contents {
         let _: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents)?;
 
         let existing_yaml = YamlFile::from_str(&contents)?;
@@ -404,6 +534,19 @@ mod tests {
         patterns: Vec<String>,
     }
 
+    fn write_config<W: Write>(
+        writer: W,
+        package_ecosystem: &str,
+        groups_by_workspace: &DependencyGroups,
+    ) -> Result<(), Error> {
+        write_config_with_indentation(
+            writer,
+            package_ecosystem,
+            groups_by_workspace,
+            ConfigIndentation::default(),
+        )
+    }
+
     fn sample_groups() -> DependencyGroups {
         [(
             String::new(),
@@ -530,12 +673,53 @@ mod tests {
         assert!(config_path.is_file());
 
         let contents = std::fs::read_to_string(config_path).unwrap();
+        assert!(contents.contains("updates:\n  - package-ecosystem: npm"));
+        assert!(contents.contains("patterns:\n          - react"));
+
         let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
         let cooldown = &config["updates"][0]["cooldown"];
 
         assert_eq!(cooldown["semver-major-days"], 30);
         assert_eq!(cooldown["semver-minor-days"], 7);
         assert_eq!(cooldown["semver-patch-days"], 3);
+    }
+
+    #[test]
+    fn preserves_existing_indentless_updates_sequence_when_merging() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("dependabot.yml");
+        std::fs::write(
+            &config_path,
+            "version: 2\nupdates:\n- package-ecosystem: npm\n  directory: /\n  schedule:\n    interval: daily\n  groups:\n    legacy:\n      patterns:\n      - legacy-*\n",
+        )
+        .unwrap();
+
+        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
+
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        assert!(contents.contains("updates:\n- package-ecosystem: npm"));
+        assert!(
+            contents.contains("patterns:\n      - '@acme/core'"),
+            "{contents}"
+        );
+        let _: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+    }
+
+    #[test]
+    fn infers_indentless_pattern_lists_when_existing_config_has_no_pattern_lists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("dependabot.yml");
+        std::fs::write(
+            &config_path,
+            "version: 2\nupdates:\n- package-ecosystem: npm\n  directory: /\n  schedule:\n    interval: daily\n",
+        )
+        .unwrap();
+
+        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
+
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        assert!(contents.contains("patterns:\n      - '@acme/core'"));
+        let _: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
     }
 
     #[test]
