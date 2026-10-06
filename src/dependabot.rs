@@ -228,9 +228,18 @@ pub(super) fn write_config_file(
         let _: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents)?;
 
         let existing_yaml = YamlFile::from_str(&contents)?;
-        let generated_yaml = YamlFile::from_str(&generated_text)?;
-        merge_generated_groups_losslessly(&existing_yaml, &generated_yaml)?;
-        existing_yaml.to_string()
+        if existing_yaml.document().is_none() {
+            let mut output = contents;
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&generated_text);
+            output
+        } else {
+            let generated_yaml = YamlFile::from_str(&generated_text)?;
+            merge_generated_groups_losslessly(&existing_yaml, &generated_yaml)?;
+            existing_yaml.to_string()
+        }
     } else {
         generated_text
     };
@@ -527,6 +536,24 @@ mod tests {
         assert_eq!(cooldown["semver-major-days"], 30);
         assert_eq!(cooldown["semver-minor-days"], 7);
         assert_eq!(cooldown["semver-patch-days"], 3);
+    }
+
+    #[test]
+    fn generates_config_from_an_empty_existing_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("dependabot.yml");
+        std::fs::write(&config_path, "").unwrap();
+
+        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
+
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+        assert_eq!(config["version"], 2);
+        assert_eq!(config["updates"][0]["package-ecosystem"], "npm");
+        assert_eq!(
+            config["updates"][0]["groups"]["acme"]["patterns"][0],
+            "@acme/core"
+        );
     }
 
     #[test]
