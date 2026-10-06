@@ -184,28 +184,49 @@ updates:
           - "eslint*"
 ```
 
-`dependaconf` reads npm lockfile versions 2 and 3, Yarn Classic v1 lockfiles,
-and modern Yarn lockfiles. If both `package-lock.json` and `yarn.lock` are
-present, the npm lockfile is used. Yarn dependencies are read from
-`package.json` and resolved against `yarn.lock`; Yarn workspace manifests are
-processed separately. Classic Yarn lockfiles do not record peer dependency
-metadata, so only modern Yarn lockfiles can form groups based on installed peer
-dependencies. The tool creates
-`.github/dependabot.yml` and the `.github` directory if needed, then writes a
-configuration that groups dependencies by installed peer dependencies and, for
-remaining packages, by npm scope.
+### Lockfiles and peer dependencies
 
-If a Dependabot config already exists, the tool merges its generated groups into
-matching ecosystem/directory entries. Groups with at least half of the smaller
-group's dependency patterns in common are merged, even if their names differ;
-the existing name and existing-only patterns are retained. A same-named group
-without enough overlap is replaced. Pattern order does not affect matching.
-Other groups and settings are preserved. Whitespace and comments outside the
-groups being updated are preserved as well. Missing entries are added
-automatically.
+`dependaconf` supports:
 
-For JavaScript workspaces, the root package and each workspace are processed
-separately, so dependencies from different directories are not grouped together.
+- npm lockfile versions 2 and 3
+- Yarn Classic v1 lockfiles
+- Modern Yarn (Berry) lockfiles
+
+If both `package-lock.json` and `yarn.lock` are present, dependaconf uses the
+npm lockfile. Yarn dependencies are resolved from `package.json` against
+`yarn.lock`; workspace manifests are processed separately.
+
+Peer-based grouping depends on the metadata available in the lockfile:
+
+- npm and Yarn Berry provide peer dependency metadata for grouping packages
+  with their installed peers.
+- Yarn Classic records package versions, but not peer dependency metadata.
+  Classic projects can still group packages by npm scope and pair matching
+  `@types` packages.
+
+### Generated config
+
+The tool creates `.github/dependabot.yml` and the `.github` directory if needed.
+It groups dependencies by available peer metadata, then groups remaining
+packages by npm scope.
+
+### Updating an existing config
+
+Generated groups are merged into existing entries with the same ecosystem and
+directory. A generated group matches an existing group when at least half of
+the smaller group's dependency patterns overlap; pattern order does not matter.
+
+On a match, dependaconf keeps the existing group name and patterns, then adds
+any generated patterns that are missing. If there is no dependency match, a
+same-named group is replaced. Other groups and settings are preserved.
+
+Whitespace and comments outside updated groups are preserved. Missing update
+entries are added automatically.
+
+### Workspaces
+
+The root package and each JavaScript workspace are processed separately.
+Dependencies from different directories are not grouped together.
 
 If you want a single repository-root Dependabot entry for a monorepo, run:
 
