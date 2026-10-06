@@ -4,14 +4,18 @@ use std::{
     fs::File,
     io::{self, Write},
     path::Path,
+    str::FromStr,
 };
 
 use crate::ecosystems::DependencyGroups;
+use yaml_edit::YamlFile;
 
 #[derive(Debug)]
 pub(super) enum Error {
     Io(io::Error),
     Yaml(serde_yaml_ng::Error),
+    YamlEdit(yaml_edit::YamlError),
+    Utf8(std::string::FromUtf8Error),
     DuplicateGroupIdentifier,
     InvalidConfig(&'static str),
 }
@@ -21,6 +25,8 @@ impl std::fmt::Display for Error {
         match self {
             Self::Io(error) => write!(f, "Dependabot config I/O failed: {error}"),
             Self::Yaml(error) => write!(f, "Dependabot config YAML failed: {error}"),
+            Self::YamlEdit(error) => write!(f, "Dependabot config YAML editing failed: {error}"),
+            Self::Utf8(error) => write!(f, "Dependabot config UTF-8 conversion failed: {error}"),
             Self::DuplicateGroupIdentifier => write!(
                 f,
                 "multiple dependency groups produced the same Dependabot identifier"
@@ -35,6 +41,8 @@ impl StdError for Error {
         match self {
             Self::Io(error) => Some(error),
             Self::Yaml(error) => Some(error),
+            Self::YamlEdit(error) => Some(error),
+            Self::Utf8(error) => Some(error),
             Self::DuplicateGroupIdentifier | Self::InvalidConfig(_) => None,
         }
     }
@@ -49,6 +57,18 @@ impl From<io::Error> for Error {
 impl From<serde_yaml_ng::Error> for Error {
     fn from(error: serde_yaml_ng::Error) -> Self {
         Self::Yaml(error)
+    }
+}
+
+impl From<yaml_edit::YamlError> for Error {
+    fn from(error: yaml_edit::YamlError) -> Self {
+        Self::YamlEdit(error)
+    }
+}
+
+impl From<std::string::FromUtf8Error> for Error {
+    fn from(error: std::string::FromUtf8Error) -> Self {
+        Self::Utf8(error)
     }
 }
 
@@ -201,75 +221,99 @@ pub(super) fn write_config_file(
     }
     let mut generated = Vec::new();
     write_config(&mut generated, package_ecosystem, groups_by_workspace)?;
-    let generated: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&generated)?;
+    let generated_text = String::from_utf8(generated)?;
 
     let contents = if path.exists() {
         let contents = std::fs::read_to_string(path)?;
-        let mut existing: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents)?;
-        merge_generated_groups(&mut existing, generated)?;
-        existing
+        let _: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents)?;
+
+        let existing_yaml = YamlFile::from_str(&contents)?;
+        let generated_yaml = YamlFile::from_str(&generated_text)?;
+        merge_generated_groups_losslessly(&existing_yaml, &generated_yaml)?;
+        existing_yaml.to_string()
     } else {
-        generated
+        generated_text
     };
 
     let mut file = File::create(path)?;
-    serde_yaml_ng::to_writer(&mut file, &contents)?;
+    file.write_all(contents.as_bytes())?;
     file.flush()?;
 
     Ok(())
 }
 
-fn merge_generated_groups(
-    existing: &mut serde_yaml_ng::Value,
-    generated: serde_yaml_ng::Value,
+fn merge_generated_groups_losslessly(
+    existing: &YamlFile,
+    generated: &YamlFile,
 ) -> Result<(), Error> {
-    use serde_yaml_ng::{Mapping, Value};
+    use yaml_edit::YamlNode;
 
     let invalid_config = || {
         Error::InvalidConfig(
             "existing Dependabot config must be a mapping with an updates sequence",
         )
     };
-    let existing = existing.as_mapping_mut().ok_or_else(invalid_config)?;
-    let updates_key = Value::String("updates".to_string());
-    let updates = existing
-        .entry(updates_key)
-        .or_insert_with(|| Value::Sequence(Vec::new()))
-        .as_sequence_mut()
+    let existing = existing
+        .document()
+        .and_then(|document| document.as_mapping())
         .ok_or_else(invalid_config)?;
-    let generated_updates = generated["updates"]
-        .as_sequence()
+    let generated = generated
+        .document()
+        .and_then(|document| document.as_mapping())
+        .ok_or_else(invalid_config)?;
+    let generated_updates = generated
+        .get_sequence("updates")
         .ok_or_else(invalid_config)?;
 
-    for generated_update in generated_updates {
-        let ecosystem = &generated_update["package-ecosystem"];
-        let directory = &generated_update["directory"];
-        let generated_groups = &generated_update["groups"];
-        let matching_update = updates.iter_mut().find(|update| {
-            update["package-ecosystem"] == *ecosystem && update["directory"] == *directory
+    let Some(updates_node) = existing.get("updates") else {
+        existing.set("updates", generated_updates);
+        return Ok(());
+    };
+    let updates = updates_node.as_sequence().ok_or_else(invalid_config)?;
+
+    for generated_update in generated_updates.values() {
+        let Some(generated_update) = generated_update.as_mapping() else {
+            continue;
+        };
+        let Some(ecosystem) = generated_update.get("package-ecosystem") else {
+            continue;
+        };
+        let Some(directory) = generated_update.get("directory") else {
+            continue;
+        };
+        let matching_update = (0..updates.len()).find_map(|index| {
+            let update = updates.get(index)?;
+            let update = update.as_mapping()?;
+            let matches = update
+                .get("package-ecosystem")
+                .is_some_and(|value| value.yaml_eq(&ecosystem))
+                && update
+                    .get("directory")
+                    .is_some_and(|value| value.yaml_eq(&directory));
+            matches.then_some(update.clone())
         });
 
         let Some(matching_update) = matching_update else {
-            updates.push(generated_update.clone());
+            updates.push(generated_update);
             continue;
         };
-        let Some(generated_groups) = generated_groups.as_mapping() else {
+        let Some(generated_groups) = generated_update.get_mapping("groups") else {
             continue;
         };
-        let update = matching_update
-            .as_mapping_mut()
-            .ok_or_else(invalid_config)?;
-        let groups_key = Value::String("groups".to_string());
-        let groups = update
-            .entry(groups_key)
-            .or_insert_with(|| Value::Mapping(Mapping::new()))
-            .as_mapping_mut()
-            .ok_or(Error::InvalidConfig(
+        let Some(groups_node) = matching_update.get("groups") else {
+            matching_update.set("groups", generated_groups);
+            continue;
+        };
+        let Some(groups) = groups_node.as_mapping() else {
+            return Err(Error::InvalidConfig(
                 "groups in existing Dependabot update must be a mapping",
-            ))?;
+            ));
+        };
 
-        for (name, group) in generated_groups {
-            groups.insert(name.clone(), group.clone());
+        for (name, group) in generated_groups.iter() {
+            if let YamlNode::Scalar(name) = name {
+                groups.set(name.as_string(), group);
+            }
         }
     }
 
@@ -474,6 +518,47 @@ updates:
                 serde_yaml_ng::Value::String("react".to_string()),
                 serde_yaml_ng::Value::String("react-dom".to_string()),
             ])
+        );
+    }
+
+    #[test]
+    fn preserves_existing_config_whitespace_and_comments() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("dependabot.yml");
+        let original = r#"# manually maintained header
+version:    2
+
+registries:
+  private:
+    type: npm-registry # keep this comment
+    url: https://registry.example.com
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:  { interval: daily } # keep schedule formatting
+    open-pull-requests-limit:    5
+    groups:
+      custom:
+        patterns: [ "custom-*" ] # preserve custom group formatting
+      acme:
+        patterns: ["old-acme-pattern"]
+"#;
+        std::fs::write(&config_path, original).unwrap();
+
+        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
+
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        assert!(contents.contains("# manually maintained header\nversion:    2"));
+        assert!(contents.contains("type: npm-registry # keep this comment"));
+        assert!(contents.contains("schedule:  { interval: daily } # keep schedule formatting"));
+        assert!(contents.contains("open-pull-requests-limit:    5"));
+        assert!(contents.contains("patterns: [ \"custom-*\" ] # preserve custom group formatting"));
+
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+        assert_eq!(
+            config["updates"][0]["groups"]["acme"]["patterns"][0],
+            "@acme/core"
         );
     }
 

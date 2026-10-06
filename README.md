@@ -197,7 +197,8 @@ remaining packages, by npm scope.
 
 If a Dependabot config already exists, the tool merges its generated groups into
 matching ecosystem/directory entries. Same-named groups are replaced, while
-other groups and settings are preserved. Missing entries are added
+other groups and settings are preserved. Whitespace and comments outside the
+groups being updated are preserved as well. Missing entries are added
 automatically.
 
 For JavaScript workspaces, the root package and each workspace are processed
