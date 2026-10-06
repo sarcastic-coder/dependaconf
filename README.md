@@ -196,8 +196,11 @@ configuration that groups dependencies by installed peer dependencies and, for
 remaining packages, by npm scope.
 
 If a Dependabot config already exists, the tool merges its generated groups into
-matching ecosystem/directory entries. Same-named groups are replaced, while
-other groups and settings are preserved. Whitespace and comments outside the
+matching ecosystem/directory entries. Groups with at least half of the smaller
+group's dependency patterns in common are merged, even if their names differ;
+the existing name and existing-only patterns are retained. A same-named group
+without enough overlap is replaced. Pattern order does not affect matching.
+Other groups and settings are preserved. Whitespace and comments outside the
 groups being updated are preserved as well. Missing entries are added
 automatically.
 

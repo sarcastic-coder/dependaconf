@@ -311,13 +311,73 @@ fn merge_generated_groups_losslessly(
         };
 
         for (name, group) in generated_groups.iter() {
-            if let YamlNode::Scalar(name) = name {
-                groups.set(name.as_string(), group);
+            let YamlNode::Scalar(generated_name) = name else {
+                continue;
+            };
+            let generated_name = generated_name.as_string();
+            let existing_name = groups.iter().find_map(|(existing_name, existing_group)| {
+                let YamlNode::Scalar(existing_name) = existing_name else {
+                    return None;
+                };
+                groups_match_by_dependencies(&existing_group, &group)
+                    .then(|| (existing_name.as_string(), existing_group))
+            });
+            if let Some((existing_name, existing_group)) = existing_name {
+                let patterns_unchanged = group_patterns(&existing_group) == group_patterns(&group);
+                if existing_name != generated_name || !patterns_unchanged {
+                    merge_group_patterns(&existing_group, &group);
+                    continue;
+                }
             }
+            groups.set(generated_name, group);
         }
     }
 
     Ok(())
+}
+
+fn group_patterns(group: &yaml_edit::YamlNode) -> Option<Vec<String>> {
+    let group = group.as_mapping()?;
+    let patterns = group.get_sequence("patterns")?;
+    let mut patterns = patterns
+        .values()
+        .map(|pattern| pattern.as_scalar().map(|scalar| scalar.as_string()))
+        .collect::<Option<Vec<_>>>()?;
+    patterns.sort();
+    patterns.dedup();
+    Some(patterns)
+}
+
+fn groups_match_by_dependencies(left: &yaml_edit::YamlNode, right: &yaml_edit::YamlNode) -> bool {
+    let (Some(left), Some(right)) = (group_patterns(left), group_patterns(right)) else {
+        return false;
+    };
+    let overlap = left
+        .iter()
+        .filter(|pattern| right.contains(pattern))
+        .count();
+    overlap.saturating_mul(2) >= left.len().min(right.len()) && overlap > 0
+}
+
+fn merge_group_patterns(existing: &yaml_edit::YamlNode, generated: &yaml_edit::YamlNode) {
+    let (Some(existing_patterns), Some(generated_patterns)) = (
+        existing
+            .as_mapping()
+            .and_then(|group| group.get_sequence("patterns")),
+        group_patterns(generated),
+    ) else {
+        return;
+    };
+    let mut existing_values = existing_patterns
+        .values()
+        .filter_map(|pattern| pattern.as_scalar().map(|scalar| scalar.as_string()))
+        .collect::<std::collections::HashSet<_>>();
+
+    for pattern in generated_patterns {
+        if existing_values.insert(pattern.clone()) {
+            existing_patterns.push(pattern);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -519,6 +579,112 @@ updates:
                 serde_yaml_ng::Value::String("react-dom".to_string()),
             ])
         );
+    }
+
+    #[test]
+    fn matches_existing_groups_by_dependencies_and_keeps_their_names() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("dependabot.yml");
+        std::fs::write(
+            &config_path,
+            r#"version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+    groups:
+      custom-acme-name:
+        patterns:
+          - "@acme/ui"
+          - "@acme/core"
+      untouched:
+        patterns:
+          - "custom-*"
+"#,
+        )
+        .unwrap();
+
+        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
+
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+        let groups = &config["updates"][0]["groups"];
+
+        assert!(groups.get("custom-acme-name").is_some());
+        assert!(groups.get("acme").is_none());
+        assert_eq!(
+            groups["custom-acme-name"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![
+                serde_yaml_ng::Value::String("@acme/ui".to_string()),
+                serde_yaml_ng::Value::String("@acme/core".to_string()),
+            ])
+        );
+        assert_eq!(groups["untouched"]["patterns"][0], "custom-*");
+        assert_eq!(
+            groups["react"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![
+                serde_yaml_ng::Value::String("react".to_string()),
+                serde_yaml_ng::Value::String("react-dom".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn matches_existing_groups_by_partial_dependency_overlap() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("dependabot.yml");
+        std::fs::write(
+            &config_path,
+            r#"version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+    groups:
+      custom-acme-name:
+        patterns:
+          - "@acme/core"
+          - "@acme/legacy"
+          - "custom-only"
+"#,
+        )
+        .unwrap();
+
+        write_config_file(&config_path, "npm", &sample_groups()).unwrap();
+
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+        let groups = &config["updates"][0]["groups"];
+
+        assert!(groups.get("custom-acme-name").is_some());
+        assert!(groups.get("acme").is_none());
+        assert_eq!(
+            groups["custom-acme-name"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![
+                serde_yaml_ng::Value::String("@acme/core".to_string()),
+                serde_yaml_ng::Value::String("@acme/legacy".to_string()),
+                serde_yaml_ng::Value::String("custom-only".to_string()),
+                serde_yaml_ng::Value::String("@acme/ui".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn does_not_match_groups_below_the_partial_overlap_threshold() {
+        use yaml_edit::YamlFile;
+
+        let left_file =
+            YamlFile::from_str("patterns:\n  - alpha\n  - beta\n  - gamma\n  - delta\n").unwrap();
+        let left =
+            yaml_edit::YamlNode::Mapping(left_file.document().unwrap().as_mapping().unwrap());
+        let right_file =
+            YamlFile::from_str("patterns:\n  - alpha\n  - epsilon\n  - zeta\n  - eta\n").unwrap();
+        let right =
+            yaml_edit::YamlNode::Mapping(right_file.document().unwrap().as_mapping().unwrap());
+
+        assert!(!groups_match_by_dependencies(&left, &right));
     }
 
     #[test]
