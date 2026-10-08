@@ -216,9 +216,11 @@ Generated groups are merged into existing entries with the same ecosystem and
 directory. A generated group matches an existing group when at least half of
 the smaller group's dependency patterns overlap; pattern order does not matter.
 
-On a match, dependaconf keeps the existing group name and patterns, then adds
-any generated patterns that are missing. If there is no dependency match, a
-same-named group is replaced. Other groups and settings are preserved.
+Existing wildcard patterns (such as `@apollo/*`) are considered when matching
+generated dependencies. On a match, dependaconf keeps the existing group name
+and patterns, then adds generated patterns that are not already covered. If
+there is no dependency match, a same-named group is replaced. Other groups and
+settings are preserved.
 
 Whitespace and comments outside updated groups are preserved. Missing update
 entries are added automatically.

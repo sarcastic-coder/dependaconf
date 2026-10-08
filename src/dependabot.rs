@@ -491,11 +491,43 @@ fn groups_match_by_dependencies(left: &yaml_edit::YamlNode, right: &yaml_edit::Y
     let (Some(left), Some(right)) = (group_patterns(left), group_patterns(right)) else {
         return false;
     };
-    let overlap = left
+    let overlap = right
         .iter()
-        .filter(|pattern| right.contains(pattern))
+        .filter(|dependency| {
+            left.iter()
+                .any(|pattern| dependency_pattern_matches(pattern, dependency))
+        })
         .count();
     overlap.saturating_mul(2) >= left.len().min(right.len()) && overlap > 0
+}
+
+fn dependency_pattern_matches(pattern: &str, dependency: &str) -> bool {
+    let pattern: Vec<_> = pattern.chars().collect();
+    let dependency: Vec<_> = dependency.chars().collect();
+    let (mut pattern_index, mut dependency_index) = (0, 0);
+    let mut star_index = None;
+    let mut retry_dependency_index = 0;
+
+    while dependency_index < dependency.len() {
+        if pattern.get(pattern_index) == Some(&dependency[dependency_index]) {
+            pattern_index += 1;
+            dependency_index += 1;
+        } else if pattern.get(pattern_index) == Some(&'*') {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            retry_dependency_index = dependency_index;
+        } else if let Some(star_index) = star_index {
+            pattern_index = star_index + 1;
+            retry_dependency_index += 1;
+            dependency_index = retry_dependency_index;
+        } else {
+            return false;
+        }
+    }
+
+    pattern[pattern_index..]
+        .iter()
+        .all(|character| *character == '*')
 }
 
 fn merge_group_patterns(existing: &yaml_edit::YamlNode, generated: &yaml_edit::YamlNode) {
@@ -513,7 +545,10 @@ fn merge_group_patterns(existing: &yaml_edit::YamlNode, generated: &yaml_edit::Y
         .collect::<std::collections::HashSet<_>>();
 
     for pattern in generated_patterns {
-        if existing_values.insert(pattern.clone()) {
+        let is_covered = existing_values
+            .iter()
+            .any(|existing| dependency_pattern_matches(existing, &pattern));
+        if !is_covered && existing_values.insert(pattern.clone()) {
             existing_patterns.push(pattern);
         }
     }
@@ -883,6 +918,57 @@ updates:
     }
 
     #[test]
+    fn merges_generated_dependencies_into_existing_wildcard_group() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("dependabot.yml");
+        std::fs::write(
+            &config_path,
+            r#"version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+    groups:
+      apollo-packages:
+        patterns:
+          - "@apollo/*"
+"#,
+        )
+        .unwrap();
+        let groups: DependencyGroups = [(
+            String::new(),
+            [(
+                "@apollo".to_string(),
+                vec![
+                    "@apollo/client".to_string(),
+                    "@apollo/server".to_string(),
+                    "@apollo/utils".to_string(),
+                ],
+            )]
+            .into_iter()
+            .collect(),
+        )]
+        .into_iter()
+        .collect();
+
+        write_config_file(&config_path, "npm", &groups).unwrap();
+
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents).unwrap();
+        let groups = &config["updates"][0]["groups"];
+
+        assert!(groups.get("apollo-packages").is_some());
+        assert!(groups.get("apollo").is_none());
+        assert_eq!(
+            groups["apollo-packages"]["patterns"],
+            serde_yaml_ng::Value::Sequence(vec![serde_yaml_ng::Value::String(
+                "@apollo/*".to_string()
+            )])
+        );
+    }
+
+    #[test]
     fn does_not_match_groups_below_the_partial_overlap_threshold() {
         use yaml_edit::YamlFile;
 
@@ -896,6 +982,24 @@ updates:
             yaml_edit::YamlNode::Mapping(right_file.document().unwrap().as_mapping().unwrap());
 
         assert!(!groups_match_by_dependencies(&left, &right));
+    }
+
+    #[test]
+    fn matches_dependency_patterns_with_wildcards() {
+        assert!(dependency_pattern_matches(
+            "@aws-sdk/*",
+            "@aws-sdk/client-s3"
+        ));
+        assert!(dependency_pattern_matches(
+            "@apollo/*/testing",
+            "@apollo/client/testing"
+        ));
+        assert!(dependency_pattern_matches("*", "@apollo/client"));
+        assert!(!dependency_pattern_matches("@apollo/*", "@apollo"));
+        assert!(!dependency_pattern_matches(
+            "@apollo/*",
+            "@apollo-client/core"
+        ));
     }
 
     #[test]
