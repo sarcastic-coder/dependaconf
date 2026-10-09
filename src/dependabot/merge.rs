@@ -1,6 +1,6 @@
 use yaml_edit::YamlNode;
 
-use super::Error;
+use super::config::Error;
 
 pub(super) fn merge_generated_groups_losslessly(
     existing: &yaml_edit::YamlFile,
