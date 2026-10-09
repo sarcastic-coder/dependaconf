@@ -10,6 +10,10 @@ use std::{
 use crate::ecosystems::DependencyGroups;
 use yaml_edit::YamlFile;
 
+mod model;
+
+use model::{DependabotCooldown, DependabotGroup, DependabotSchedule, DependabotUpdate};
+
 #[derive(Debug)]
 pub(super) enum Error {
     Io(io::Error),
@@ -70,36 +74,6 @@ impl From<std::string::FromUtf8Error> for Error {
     fn from(error: std::string::FromUtf8Error) -> Self {
         Self::Utf8(error)
     }
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
-struct DependabotUpdate {
-    package_ecosystem: String,
-    directory: String,
-    schedule: DependabotSchedule,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    groups: Option<BTreeMap<String, DependabotGroup>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cooldown: Option<DependabotCooldown>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
-struct DependabotCooldown {
-    semver_major_days: u8,
-    semver_minor_days: u8,
-    semver_patch_days: u8,
-}
-
-#[derive(serde::Serialize)]
-struct DependabotSchedule {
-    interval: String,
-}
-
-#[derive(serde::Serialize)]
-struct DependabotGroup {
-    patterns: Vec<String>,
 }
 
 fn dependabot_group_identifier(group: &str) -> String {
