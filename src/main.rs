@@ -47,7 +47,11 @@ impl From<dependabot::Error> for MainError {
 }
 
 #[derive(Parser)]
-#[command(version, about, long_about = None)]
+#[command(
+    version = option_env!("DEPENDACONF_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+    about,
+    long_about = None
+)]
 struct Cli {
     #[arg(
         long,

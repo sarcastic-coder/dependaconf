@@ -9,8 +9,35 @@ permissions:
   contents: write
 
 jobs:
+  release-version:
+    runs-on: ubuntu-slim
+    outputs:
+      version: ${{ steps.release-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Determine Release Version
+        id: release-version
+        run: |
+          latest=$(git tag --list '*.*.*.*' --sort=-v:refname | head -n1)
+          today=$(date -u +%Y.%m.%d)
+
+          if [[ $latest == "$today."* ]]; then
+              version="${today}.$(( ${latest##*.} + 1 ))"
+          else
+              version="$today.1"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   build:
+    needs:
+      - release-version
     runs-on: ubuntu-latest
+    env:
+      DEPENDACONF_VERSION: ${{ needs.release-version.outputs.version }}
     permissions:
       contents: read
       id-token: write
@@ -149,35 +176,18 @@ jobs:
     runs-on: ubuntu-slim
     needs:
       - build
+      - release-version
 
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
       - uses: actions/download-artifact@v7
         with:
           name: dependaconf-binaries
           path: dist/
 
-      - name: Create Tag
-        id: release-version
-        run: |
-          latest=$(git tag --list '*.*.*.*' --sort=-v:refname | head -n1)
-          today=$(date -u +%Y.%m.%d)
-
-          if [[ $latest == "$today."* ]]; then
-              version="${today}.$(( ${latest##*.} + 1 ))"
-          else
-              version="$today.1"
-          fi
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
       - name: Create Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.release-version.outputs.version }}
+          VERSION: ${{ needs.release-version.outputs.version }}
         run: |
           gh release create "$VERSION" dist/* \
               --repo="$GITHUB_REPOSITORY" \
