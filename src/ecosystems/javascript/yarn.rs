@@ -271,15 +271,6 @@ fn parse_classic_lockfile(contents: &str) -> Result<HashMap<String, Vec<String>>
     let mut in_peer_dependencies = false;
     let mut found_entry = false;
 
-    let save_entry = |parsed: &mut HashMap<String, Vec<String>>,
-                      selectors: &mut Vec<String>,
-                      peer_dependencies: &mut Vec<String>| {
-        for selector in selectors.drain(..) {
-            parsed.insert(selector, peer_dependencies.clone());
-        }
-        peer_dependencies.clear();
-    };
-
     for line in contents.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -291,7 +282,7 @@ fn parse_classic_lockfile(contents: &str) -> Result<HashMap<String, Vec<String>>
             .is_some_and(|character| character.is_whitespace())
             && trimmed.ends_with(':')
         {
-            save_entry(&mut parsed, &mut selectors, &mut peer_dependencies);
+            save_classic_entry(&mut parsed, &mut selectors, &mut peer_dependencies);
             selectors = split_selectors(trimmed.trim_end_matches(':'));
             in_peer_dependencies = false;
             found_entry = true;
@@ -304,7 +295,8 @@ fn parse_classic_lockfile(contents: &str) -> Result<HashMap<String, Vec<String>>
             peer_dependencies.push(unquote(name).to_string());
         }
     }
-    save_entry(&mut parsed, &mut selectors, &mut peer_dependencies);
+
+    save_classic_entry(&mut parsed, &mut selectors, &mut peer_dependencies);
 
     if !found_entry {
         return Err(Error::InvalidYarnLock(
@@ -312,6 +304,17 @@ fn parse_classic_lockfile(contents: &str) -> Result<HashMap<String, Vec<String>>
         ));
     }
     Ok(parsed)
+}
+
+fn save_classic_entry(
+    parsed: &mut HashMap<String, Vec<String>>,
+    selectors: &mut Vec<String>,
+    peer_dependencies: &mut Vec<String>,
+) {
+    for selector in selectors.drain(..) {
+        parsed.insert(selector, peer_dependencies.clone());
+    }
+    peer_dependencies.clear();
 }
 
 fn split_selectors(value: &str) -> Vec<String> {
