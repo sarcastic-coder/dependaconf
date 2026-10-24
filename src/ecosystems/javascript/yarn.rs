@@ -49,31 +49,42 @@ pub(super) fn read_dependency_metadata(
 
     let mut dependencies_by_workspace = BTreeMap::new();
     for (workspace, manifest) in manifests {
-        let dependencies = manifest
-            .dependencies
-            .iter()
-            .chain(manifest.dev_dependencies.iter())
-            .map(|(name, range)| {
-                let peer_dependencies = if range.starts_with("workspace:")
-                    && let Some(peers) = local_workspaces.get(name)
-                {
-                    peers.clone()
-                } else {
-                    find_peer_dependencies(&lock_entries, name, range)
-                        .or_else(|| local_workspaces.get(name).cloned())
-                        .ok_or_else(|| Error::MissingDirectDependency(name.clone()))?
-                };
-
-                Ok(DependencyMetadata {
-                    name: name.clone(),
-                    peer_dependencies,
-                })
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
+        let dependencies =
+            dependency_metadata_for_manifest(&manifest, &lock_entries, &local_workspaces)?;
         dependencies_by_workspace.insert(workspace, dependencies);
     }
 
     Ok(dependencies_by_workspace)
+}
+
+fn dependency_metadata_for_manifest(
+    manifest: &PackageJson,
+    lock_entries: &HashMap<String, Vec<String>>,
+    local_workspaces: &HashMap<String, Vec<String>>,
+) -> Result<Vec<DependencyMetadata>, Error> {
+    let dependencies = manifest
+        .dependencies
+        .iter()
+        .chain(manifest.dev_dependencies.iter())
+        .map(|(name, range)| {
+            let peer_dependencies = if range.starts_with("workspace:")
+                && let Some(peers) = local_workspaces.get(name)
+            {
+                peers.clone()
+            } else {
+                find_peer_dependencies(&lock_entries, name, range)
+                    .or_else(|| local_workspaces.get(name).cloned())
+                    .ok_or_else(|| Error::MissingDirectDependency(name.clone()))?
+            };
+
+            Ok(DependencyMetadata {
+                name: name.clone(),
+                peer_dependencies,
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+
+    Ok(dependencies)
 }
 
 fn read_package_json(path: &Path) -> Result<PackageJson, Error> {
