@@ -221,13 +221,13 @@ fn pattern_matches(pattern: &str, path: &str) -> bool {
 
 fn parse_lockfile(contents: &str) -> Result<HashMap<String, Vec<String>>, Error> {
     if contents.lines().any(|line| line.trim() == "__metadata:") {
-        parse_modern_lockfile(contents)
+        parse_berry_lockfile(contents)
     } else {
         parse_classic_lockfile(contents)
     }
 }
 
-fn parse_modern_lockfile(contents: &str) -> Result<HashMap<String, Vec<String>>, Error> {
+fn parse_berry_lockfile(contents: &str) -> Result<HashMap<String, Vec<String>>, Error> {
     let lockfile: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)?;
     let Some(entries) = lockfile.as_mapping() else {
         return Err(Error::InvalidYarnLock(
