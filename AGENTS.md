@@ -1,34 +1,26 @@
-# Project guidance
+# Agent guidance
 
-## Overview
+## Working rules
+- Be concise, technical, and task-focused.
+- Inspect relevant files and call sites before editing; expand reads only as needed.
+- Make the smallest change that solves the request. Avoid unrelated refactors or generated/example-file changes unless required.
+- Ask only when missing information blocks progress; otherwise proceed using reasonable assumptions and state material ones.
+- Keep useful comments and documentation; avoid redundant commentary.
+- Return only relevant diffs/functions when requested. Explain non-obvious decisions briefly when useful.
 
-`dependaconf` is a Rust CLI that analyzes JavaScript project dependencies and
-generates or updates `.github/dependabot.yml` with grouped dependency update
-rules. It reads npm lockfile versions 2 and 3 and Yarn Classic v1 or modern
-lockfiles, including workspaces, and reports the Dependabot ecosystem as `npm`.
+## Project
+`dependaconf` is a Rust CLI that analyses JavaScript dependencies and creates or updates `.github/dependabot.yml` with grouped update rules. It supports npm lockfiles v2/v3 and Yarn Classic v1 and modern lockfiles, including workspaces. Dependabot's ecosystem is `npm`.
 
-## Project structure
+Key paths:
+- `src/main.rs`: CLI entry point and config-writing flow.
+- `src/ecosystems.rs`: ecosystem detection and analysis coordination.
+- `src/ecosystems/javascript.rs`: JavaScript analysis and grouping.
+- `src/ecosystems/javascript/{npm.rs,yarn.rs}`: lockfile metadata; `report.rs`: debug reports.
+- `src/dependabot.rs`: Dependabot YAML serialization and merging.
+- `tests/fixtures/`: test fixtures; `examples/`: sample projects/configurations.
 
-- `src/main.rs` defines the CLI and connects project detection to config writing.
-- `src/ecosystems.rs` detects supported package ecosystems and coordinates
-  analysis.
-- `src/ecosystems/javascript.rs` handles JavaScript project analysis, selects
-  the lockfile source, and groups dependencies for Dependabot's `npm`
-  ecosystem.
-- `src/ecosystems/javascript/npm.rs` and
-  `src/ecosystems/javascript/yarn.rs` read lockfile metadata; the adjacent
-  `report.rs` renders JavaScript dependency debug reports.
-- `src/dependabot.rs` serializes and merges Dependabot YAML.
-- `tests/fixtures/` contains project fixtures used by tests.
-- `examples/` contains sample projects and generated configurations.
-
-## Development
-
-- Run the test suite with `cargo test`.
-- Check formatting with `cargo fmt --check`.
-- Build with `cargo build`.
-
-Add or update focused tests when changing dependency grouping, workspace
-handling, YAML generation, or merging. Preserve existing user-defined
-Dependabot settings when updating a config file. Avoid unrelated changes to
-example projects and generated files.
+## Correctness
+- Preserve existing user-defined Dependabot settings when updating configuration.
+- Add or update focused tests for changes to grouping, workspace handling, YAML generation, or merging.
+- Run relevant tests after changes. Before finishing, run `cargo fmt --check` and appropriate tests; run `cargo build` when build validation is relevant.
+- Use authoritative documentation for API/tool behaviour and focused web searches when external information is needed.
