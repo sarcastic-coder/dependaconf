@@ -18,6 +18,45 @@ struct PackageJson {
     workspaces: Option<serde_json::Value>,
 }
 
+struct WorkspaceManifestCollector<'a> {
+    root: &'a Path,
+    patterns: &'a [String],
+    manifests: Vec<(String, PackageJson)>,
+}
+
+impl WorkspaceManifestCollector<'_> {
+    fn collect(&mut self, directory: &Path) -> Result<(), Error> {
+        for entry in read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+
+            if file_type.is_dir() {
+                if matches!(
+                    entry.file_name().to_str(),
+                    Some("node_modules" | ".git" | ".yarn")
+                ) {
+                    continue;
+                }
+                self.collect(&path)?;
+            } else if file_type.is_file() && entry.file_name() == "package.json" {
+                let relative_path = path
+                    .parent()
+                    .and_then(|parent| parent.strip_prefix(self.root).ok())
+                    .map(path_to_slashes)
+                    .unwrap_or_default();
+
+                if is_workspace_path(&relative_path, self.patterns) {
+                    self.manifests
+                        .push((relative_path, read_package_json(&path)?));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 pub(super) fn read_dependency_metadata(
     root: &Path,
 ) -> Result<BTreeMap<String, Vec<DependencyMetadata>>, Error> {
@@ -33,7 +72,7 @@ pub(super) fn read_dependency_metadata(
     let mut manifests = vec![(String::new(), root_package)];
 
     if !workspace_patterns.is_empty() {
-        collect_workspace_manifests(root, root, &workspace_patterns, &mut manifests)?;
+        manifests.extend(collect_workspace_manifests(root, &workspace_patterns)?);
     }
 
     let local_workspaces: HashMap<_, _> = manifests
@@ -112,35 +151,15 @@ fn workspace_patterns(package: &PackageJson) -> Vec<String> {
 
 fn collect_workspace_manifests(
     root: &Path,
-    directory: &Path,
     patterns: &[String],
-    manifests: &mut Vec<(String, PackageJson)>,
-) -> Result<(), Error> {
-    for entry in read_dir(directory)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            if matches!(
-                entry.file_name().to_str(),
-                Some("node_modules" | ".git" | ".yarn")
-            ) {
-                continue;
-            }
-            collect_workspace_manifests(root, &path, patterns, manifests)?;
-        } else if file_type.is_file() && entry.file_name() == "package.json" {
-            let relative_path = path
-                .parent()
-                .and_then(|parent| parent.strip_prefix(root).ok())
-                .map(path_to_slashes)
-                .unwrap_or_default();
-            if is_workspace_path(&relative_path, patterns) {
-                manifests.push((relative_path, read_package_json(&path)?));
-            }
-        }
-    }
-
-    Ok(())
+) -> Result<Vec<(String, PackageJson)>, Error> {
+    let mut collector = WorkspaceManifestCollector {
+        root,
+        patterns,
+        manifests: Vec::new(),
+    };
+    collector.collect(root)?;
+    Ok(collector.manifests)
 }
 
 fn path_to_slashes(path: &Path) -> String {
