@@ -67,10 +67,12 @@ fn main() -> Result<(), MainError> {
     let cli = Cli::parse();
 
     let current_path = env::current_dir().map_err(MainError::CurrentDirectory)?;
-    let project = match ecosystems::detect(&current_path, cli.debug, cli.combine_workspaces)? {
+    let projects = match ecosystems::detect(&current_path, cli.debug, cli.combine_workspaces)? {
         ecosystems::Detection::Unsupported => return Ok(()),
-        ecosystems::Detection::Detected(project) => project,
+        ecosystems::Detection::Detected(projects) => projects,
     };
+
+    let project = projects.into_iter().nth(0).unwrap();
 
     if let Some(debug_report) = &project.debug_report {
         eprint!("{debug_report}");

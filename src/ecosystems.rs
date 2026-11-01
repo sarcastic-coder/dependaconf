@@ -5,6 +5,7 @@ use std::{
     path::Path,
 };
 
+mod github_actions;
 mod javascript;
 
 #[derive(Debug)]
@@ -155,7 +156,7 @@ pub(super) struct ProjectDependencies {
 
 pub(super) enum Detection {
     Unsupported,
-    Detected(ProjectDependencies),
+    Detected(Vec<ProjectDependencies>),
 }
 
 pub(super) fn detect(
@@ -167,14 +168,28 @@ pub(super) fn detect(
         return Ok(Detection::Unsupported);
     }
 
-    let (groups_by_workspace, debug_report) =
-        javascript::dependency_analysis(root, include_debug_report, combine_workspaces)?;
+    let mut projects: Vec<ProjectDependencies> = Vec::new();
 
-    Ok(Detection::Detected(ProjectDependencies {
-        package_ecosystem: javascript::DEPENDABOT_NAME,
-        groups_by_workspace,
-        debug_report,
-    }))
+    if javascript::is_project(root) {
+        let (groups_by_workspace, debug_report) =
+            javascript::dependency_analysis(root, include_debug_report, combine_workspaces)?;
+
+        projects.push(ProjectDependencies {
+            package_ecosystem: javascript::DEPENDABOT_NAME,
+            groups_by_workspace,
+            debug_report,
+        });
+    }
+
+    if github_actions::is_project(root) {
+        projects.push(ProjectDependencies {
+            package_ecosystem: github_actions::DEPENDABOT_NAME,
+            groups_by_workspace: DependencyGroups::default(),
+            debug_report: None,
+        });
+    }
+
+    Ok(Detection::Detected(projects))
 }
 
 #[cfg(test)]
@@ -185,9 +200,11 @@ mod tests {
     fn detects_project_and_returns_ecosystem_neutral_groups() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm-peer");
 
-        let Detection::Detected(project) = detect(&root, false, false).unwrap() else {
+        let Detection::Detected(projects) = detect(&root, false, false).unwrap() else {
             panic!("expected project to be detected");
         };
+
+        let project = projects.into_iter().nth(0).unwrap();
 
         assert_eq!(project.package_ecosystem, "npm");
         assert!(project.groups_by_workspace.get("").is_some());
@@ -211,12 +228,50 @@ react@^18.0.0:
         )
         .unwrap();
 
-        let Detection::Detected(project) = detect(temp_dir.path(), false, false).unwrap() else {
+        let Detection::Detected(projects) = detect(temp_dir.path(), false, false).unwrap() else {
             panic!("expected Yarn project to be detected");
         };
 
+        let project = projects.into_iter().nth(0).unwrap();
+
         assert_eq!(project.package_ecosystem, "npm");
         assert!(project.groups_by_workspace.get("").is_some());
+    }
+
+    #[test]
+    fn detects_multiple_dependency_types() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let npm_project = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/npm-peer");
+        std::fs::copy(
+            npm_project.join("package.json"),
+            temp_dir.path().join("package.json"),
+        )
+        .unwrap();
+        std::fs::copy(
+            npm_project.join("package-lock.json"),
+            temp_dir.path().join("package-lock.json"),
+        )
+        .unwrap();
+
+        let workflows_dir = temp_dir.path().join(".github/workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            workflows_dir.join("ci.yml"),
+            "name: CI\njobs:\n  test:\n    steps:\n      - uses: actions/checkout@v4\n",
+        )
+        .unwrap();
+
+        let Detection::Detected(projects) = detect(temp_dir.path(), false, false).unwrap() else {
+            panic!("expected dependency types to be detected");
+        };
+
+        assert_eq!(projects.len(), 2);
+        let package_ecosystems: std::collections::HashSet<_> = projects
+            .iter()
+            .map(|project| project.package_ecosystem)
+            .collect();
+        assert!(package_ecosystems.contains("npm"));
+        assert!(package_ecosystems.contains("github-actions"));
     }
 
     #[test]
@@ -268,9 +323,11 @@ react@^18.0.0:
     fn combines_groups_during_detection() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/npm/apollo-monorepo");
 
-        let Detection::Detected(project) = detect(&root, true, true).unwrap() else {
+        let Detection::Detected(projects) = detect(&root, true, true).unwrap() else {
             panic!("expected project to be detected");
         };
+
+        let project = projects.into_iter().nth(0).unwrap();
 
         assert_eq!(project.groups_by_workspace.iter().count(), 1);
         let groups = project.groups_by_workspace.get("").unwrap();

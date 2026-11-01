@@ -807,11 +807,12 @@ updates:
     fn combines_apollo_monorepo_without_duplicate_dependency_patterns() {
         let example_root =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/npm/apollo-monorepo");
-        let crate::ecosystems::Detection::Detected(project) =
+        let crate::ecosystems::Detection::Detected(projects) =
             crate::ecosystems::detect(&example_root, true, true).unwrap()
         else {
             panic!("expected project to be detected");
         };
+        let project = projects.into_iter().nth(0).unwrap();
         let debug_report = project.debug_report.as_deref().unwrap();
         let mut output = Vec::new();
 
