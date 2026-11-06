@@ -1,0 +1,9 @@
+on:
+  push:
+
+jobs:
+  job_a:
+    runs-on: ubuntu-latest
+    steps:
+      - name: A step
+        uses: actions/checkout@v3
