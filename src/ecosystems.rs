@@ -182,9 +182,11 @@ pub(super) fn detect(
     }
 
     if github_actions::is_project(root) {
+        let groups_by_workspace = github_actions::dependency_analysis(root)?;
+
         projects.push(ProjectDependencies {
             package_ecosystem: github_actions::DEPENDABOT_NAME,
-            groups_by_workspace: DependencyGroups::default(),
+            groups_by_workspace,
             debug_report: None,
         });
     }
