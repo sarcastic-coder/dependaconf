@@ -10,6 +10,7 @@ mod javascript;
 
 #[derive(Debug)]
 pub(super) enum Error {
+    GitHubActions(github_actions::Error),
     JavaScript(javascript::Error),
     SharedDependenciesGroupConflict,
 }
@@ -17,6 +18,9 @@ pub(super) enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::GitHubActions(error) => {
+                write!(f, "GitHub Actions dependency analysis failed: {error}")
+            }
             Self::JavaScript(error) => write!(f, "JavaScript dependency analysis failed: {error}"),
             Self::SharedDependenciesGroupConflict => write!(
                 f,
@@ -29,6 +33,7 @@ impl fmt::Display for Error {
 impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
+            Self::GitHubActions(error) => Some(error),
             Self::JavaScript(error) => Some(error),
             Self::SharedDependenciesGroupConflict => None,
         }
@@ -38,6 +43,12 @@ impl StdError for Error {
 impl From<javascript::Error> for Error {
     fn from(error: javascript::Error) -> Self {
         Self::JavaScript(error)
+    }
+}
+
+impl From<github_actions::Error> for Error {
+    fn from(error: github_actions::Error) -> Self {
+        Self::GitHubActions(error)
     }
 }
 
@@ -181,14 +192,23 @@ pub(super) fn detect(
         });
     }
 
-    if github_actions::is_project(root) {
-        let groups_by_workspace = github_actions::dependency_analysis(root)?;
+    let github_actions_project: Result<
+        Option<github_actions::GitHubActionsProject>,
+        github_actions::Error,
+    > = github_actions::GitHubActionsProject::from_path(root);
 
-        projects.push(ProjectDependencies {
-            package_ecosystem: github_actions::DEPENDABOT_NAME,
-            groups_by_workspace,
-            debug_report: None,
-        });
+    match github_actions_project {
+        Ok(Some(project)) => {
+            let groups_by_workspace = github_actions::dependency_analysis(&project)?;
+
+            projects.push(ProjectDependencies {
+                package_ecosystem: github_actions::DEPENDABOT_NAME,
+                groups_by_workspace,
+                debug_report: None,
+            });
+        }
+        Ok(None) => {}
+        Err(_) => {}
     }
 
     Ok(Detection::Detected(projects))
